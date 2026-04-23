@@ -1,0 +1,30 @@
+[project]
+name = "crisis"
+version = "0.1.0"
+description = "Crisis: Probabilistically Self Organizing Total Order in Unstructured P2P Networks"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "CC-BY-4.0"
+authors = [
+    { name = "Mirco Richter (paper)", email = "mirco.richter@mailbox.org" },
+]
+dependencies = [
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "rich>=13.0",
+]
+
+[project.scripts]
+crisis-node = "crisis.node:main"
+crisis-demo = "crisis.demo:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
