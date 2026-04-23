@@ -78,8 +78,8 @@ class Simulation:
     """
 
     def __init__(self, num_honest: int = 3, num_byzantine: int = 0,
-                 pow_zeros: int = 0, difficulty: int = 2,
-                 connectivity_k: int = 1, seed: int = 42):
+                 pow_zeros: int = 2, difficulty: int = 1,
+                 connectivity_k: int = 0, seed: int = 42):
         self.difficulty_oracle = DifficultyOracle(constant_difficulty=difficulty)
         self.connectivity_k = connectivity_k
         self.weight_system = ProofOfWorkWeight(min_leading_zeros=pow_zeros)
@@ -154,6 +154,7 @@ class Simulation:
         for node in self.nodes:
             compute_rounds(node.graph, self.difficulty_oracle, self.connectivity_k)
 
+            # Compute SVP for all last vertices
             for vertex in node.graph.all_vertices():
                 if vertex.is_last:
                     compute_safe_voting_pattern(
@@ -161,13 +162,19 @@ class Simulation:
                         self.connectivity_k
                     )
 
+            # Compute leader election in round order (lower rounds first).
+            # This ensures that when a higher-round vertex reads votes from
+            # its voting set members, those members have already computed
+            # their own votes.
             leader_dict: dict[int, list[tuple[int, Message]]] = {}
-            for vertex in node.graph.all_vertices():
-                if vertex.svp:
-                    compute_virtual_leader_election(
-                        vertex, node.graph, self.difficulty_oracle,
-                        self.connectivity_k, leader_dict
-                    )
+            svp_vertices = [v for v in node.graph.all_vertices() if v.svp]
+            svp_vertices.sort(key=lambda v: v.round if v.round is not None else 0)
+
+            for vertex in svp_vertices:
+                compute_virtual_leader_election(
+                    vertex, node.graph, self.difficulty_oracle,
+                    self.connectivity_k, leader_dict
+                )
 
             for round_num, entries in leader_dict.items():
                 for deciding_round, leader_msg in entries:
@@ -324,10 +331,10 @@ def main():
                         help="Number of byzantine nodes (default: 0)")
     parser.add_argument("--steps", type=int, default=10,
                         help="Number of simulation steps (default: 10)")
-    parser.add_argument("--pow-zeros", type=int, default=0,
-                        help="Min PoW leading zeros (default: 0 = no PoW)")
-    parser.add_argument("--difficulty", type=int, default=2,
-                        help="Difficulty oracle constant (default: 2)")
+    parser.add_argument("--pow-zeros", type=int, default=2,
+                        help="Min PoW leading zeros (default: 2)")
+    parser.add_argument("--difficulty", type=int, default=1,
+                        help="Difficulty oracle constant (default: 1)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility (default: 42)")
 

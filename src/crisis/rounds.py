@@ -145,15 +145,22 @@ def _is_k_reachable(v_from: Vertex, v_to: Vertex,
     expensive and not really necessary in our setting... all we need is some
     insurance that information flows through enough real world processes."
     We use total path weight as a simpler proxy.
+
+    Special case: k <= 0 degenerates to simple reachability (is v_from in
+    the past of v_to?).  This is the appropriate setting for small demos
+    where weight accumulation is limited.
     """
-    if v_from not in graph.past(v_to):
+    past_of_to = graph.past(v_to)
+
+    if v_from not in past_of_to:
         return False
 
-    # Compute the weight of all vertices in the path from v_from to v_to
-    # (all vertices that are in both the future of v_from and the past of v_to)
-    past_of_to = graph.past(v_to)
-    future_of_from = graph.future(v_from)
+    # k <= 0: simple reachability suffices
+    if k <= 0:
+        return True
 
+    # k > 0: check that enough weight exists on the path
+    future_of_from = graph.future(v_from)
     path_vertices = past_of_to & future_of_from
     total_weight = graph.set_weight(path_vertices)
 
