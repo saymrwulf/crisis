@@ -4,3 +4,8 @@ Package.resolved
 *.xcodeproj
 DerivedData/
 xcuserdata/
+
+# Build artifacts produced by bundle.sh
+CrisisViz.app/
+AppIcon.iconset/
+AppIcon.icns

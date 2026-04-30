@@ -20,6 +20,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Claude Code auto-memory (user-local)
+.claude/
+
 # Testing
 .pytest_cache/
 .coverage
