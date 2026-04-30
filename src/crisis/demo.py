@@ -28,6 +28,10 @@ from crisis.crypto import digest
 from crisis.graph import LamportGraph
 from crisis.message import Message, Vertex, ID_LENGTH, NONCE_LENGTH
 from crisis.order import LeaderStream, compute_order
+from crisis.recorder import (
+    EventRecorder, EventType, capture_snapshot,
+    record_rounds, record_voting, record_leader_election,
+)
 from crisis.rounds import compute_rounds, max_round, last_vertices_in_round
 from crisis.voting import compute_safe_voting_pattern, compute_virtual_leader_election
 from crisis.weight import ProofOfWorkWeight, DifficultyOracle
@@ -79,11 +83,13 @@ class Simulation:
 
     def __init__(self, num_honest: int = 3, num_byzantine: int = 0,
                  pow_zeros: int = 2, difficulty: int = 1,
-                 connectivity_k: int = 0, seed: int = 42):
+                 connectivity_k: int = 0, seed: int = 42,
+                 recorder: Optional[EventRecorder] = None):
         self.difficulty_oracle = DifficultyOracle(constant_difficulty=difficulty)
         self.connectivity_k = connectivity_k
         self.weight_system = ProofOfWorkWeight(min_leading_zeros=pow_zeros)
         self.seed = seed
+        self.recorder = recorder
         random.seed(seed)
 
         # Create nodes
@@ -106,6 +112,7 @@ class Simulation:
 
         self.step_count = 0
         self.all_messages: list[Message] = []
+        self.snapshots: list[capture_snapshot.__class__] = []  # type: ignore
 
     def step(self) -> dict:
         """Execute one simulation step.
@@ -113,6 +120,12 @@ class Simulation:
         Returns a dict with step results for display.
         """
         self.step_count += 1
+        rec = self.recorder
+
+        if rec:
+            rec.record(self.step_count, EventType.STEP_BEGIN, "",
+                       sim_step=self.step_count)
+
         step_results = {
             "step": self.step_count,
             "new_messages": [],
@@ -130,57 +143,99 @@ class Simulation:
 
             if msg is not None:
                 new_messages.append((node, msg))
+                msg_digest = msg.compute_digest().hex()[:12]
+                msg_weight = self.weight_system.weight(msg)
+
                 step_results["new_messages"].append({
                     "from": node.name,
-                    "digest": msg.compute_digest().hex()[:12],
-                    "weight": self.weight_system.weight(msg),
+                    "digest": msg_digest,
+                    "weight": msg_weight,
                     "payload": msg.payload.decode(errors="replace"),
                 })
+
+                if rec:
+                    evt = EventType.BYZANTINE_MUTATION if node.is_byzantine else EventType.MESSAGE_CREATED
+                    rec.record(
+                        self.step_count, evt, node.name,
+                        digest_hex=msg_digest,
+                        process_id_hex=msg.id.hex()[:8],
+                        payload_str=msg.payload.decode(errors="replace")[:60],
+                        weight=msg_weight,
+                        num_refs=len(msg.digests),
+                    )
 
         # Phase 2: Gossip -- deliver all messages to all nodes
         for source_node, msg in new_messages:
             self.all_messages.append(msg)
             for target_node in self.nodes:
-                # Deliver to all nodes (including source, for consistency)
-                target_node.graph.extend(msg)
+                result = target_node.graph.extend(msg)
+                if rec and result is not None:
+                    rec.record(
+                        self.step_count, EventType.MESSAGE_DELIVERED, target_node.name,
+                        digest_hex=msg.compute_digest().hex()[:12],
+                        from_node=source_node.name,
+                    )
 
         # Also re-deliver older messages that nodes might be missing
-        # (simulates pull gossip catching up)
         for msg in self.all_messages:
             for node in self.nodes:
-                node.graph.extend(msg)  # extend() is idempotent (integrity check)
+                node.graph.extend(msg)  # extend() is idempotent
 
         # Phase 3: Compute consensus on each node
+        self._last_orders: dict[str, list] = {}
         for node in self.nodes:
-            compute_rounds(node.graph, self.difficulty_oracle, self.connectivity_k)
+            if rec:
+                record_rounds(node.graph, self.difficulty_oracle,
+                              self.connectivity_k, rec,
+                              self.step_count, node.name)
+            else:
+                compute_rounds(node.graph, self.difficulty_oracle,
+                               self.connectivity_k)
 
             # Compute SVP for all last vertices
             for vertex in node.graph.all_vertices():
                 if vertex.is_last:
-                    compute_safe_voting_pattern(
-                        vertex, node.graph, self.difficulty_oracle,
-                        self.connectivity_k
-                    )
+                    if rec:
+                        record_voting(vertex, node.graph,
+                                      self.difficulty_oracle,
+                                      self.connectivity_k, rec,
+                                      self.step_count, node.name)
+                    else:
+                        compute_safe_voting_pattern(
+                            vertex, node.graph, self.difficulty_oracle,
+                            self.connectivity_k
+                        )
 
-            # Compute leader election in round order (lower rounds first).
-            # This ensures that when a higher-round vertex reads votes from
-            # its voting set members, those members have already computed
-            # their own votes.
+            # Compute leader election in round order
             leader_dict: dict[int, list[tuple[int, Message]]] = {}
             svp_vertices = [v for v in node.graph.all_vertices() if v.svp]
             svp_vertices.sort(key=lambda v: v.round if v.round is not None else 0)
 
             for vertex in svp_vertices:
-                compute_virtual_leader_election(
-                    vertex, node.graph, self.difficulty_oracle,
-                    self.connectivity_k, leader_dict
-                )
+                if rec:
+                    record_leader_election(
+                        vertex, node.graph, self.difficulty_oracle,
+                        self.connectivity_k, leader_dict, rec,
+                        self.step_count, node.name
+                    )
+                else:
+                    compute_virtual_leader_election(
+                        vertex, node.graph, self.difficulty_oracle,
+                        self.connectivity_k, leader_dict
+                    )
 
             for round_num, entries in leader_dict.items():
                 for deciding_round, leader_msg in entries:
                     node.leader_stream.update(round_num, deciding_round, leader_msg)
 
             ordered = compute_order(node.graph, node.leader_stream)
+            self._last_orders[node.name] = ordered
+
+            if rec:
+                rec.record(
+                    self.step_count, EventType.ORDER_COMPUTED, node.name,
+                    count=len(ordered),
+                )
 
             mr = max_round(node.graph)
             step_results["node_states"].append({
@@ -191,6 +246,10 @@ class Simulation:
                 "ordered": len(ordered),
                 "is_byzantine": node.is_byzantine,
             })
+
+        if rec:
+            rec.record(self.step_count, EventType.STEP_END, "",
+                       sim_step=self.step_count)
 
         return step_results
 
@@ -221,14 +280,38 @@ class Simulation:
         else:
             return node.generate_message(payload)
 
-    def run(self, num_steps: int = 10, verbose: bool = True) -> list[dict]:
-        """Run the simulation for a number of steps."""
+    def run(self, num_steps: int = 10, verbose: bool = True,
+            progress_callback=None) -> list[dict]:
+        """Run the simulation for a number of steps.
+
+        Args:
+            num_steps: Number of simulation steps to run.
+            verbose: Print step results to stdout.
+            progress_callback: Optional callable(step, total) for progress UI.
+        """
         results = []
-        for _ in range(num_steps):
+        for i in range(num_steps):
             result = self.step()
             results.append(result)
             if verbose:
                 _print_step(result)
+
+            # Capture snapshot for visualization
+            if self.recorder:
+                snap = capture_snapshot(self.step_count, self.nodes,
+                                        self.weight_system,
+                                        precomputed_orders=self._last_orders)
+                self.recorder.snapshots.append(snap)
+
+                # Convergence check event
+                self.recorder.record(
+                    self.step_count, EventType.CONVERGENCE_CHECK, "",
+                    convergence=snap.convergence,
+                    agreed_prefix=snap.agreed_prefix_length,
+                )
+
+            if progress_callback:
+                progress_callback(i + 1, num_steps)
 
         if verbose:
             _print_convergence_summary(self)

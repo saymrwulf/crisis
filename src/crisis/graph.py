@@ -60,6 +60,10 @@ class LamportGraph:
         # digest -> set of digests that reference this vertex
         self.reverse_edges: dict[bytes, set[bytes]] = {}
 
+        # Cache for past() results: digest -> frozenset of digests
+        # Invalidated when new vertices are added via extend()
+        self._past_cache: dict[bytes, frozenset[bytes]] = {}
+
     # ------------------------------------------------------------------
     # Graph queries
     # ------------------------------------------------------------------
@@ -124,8 +128,13 @@ class LamportGraph:
         Returns the set of all vertices that are causally before v
         (including v itself -- reflexivity).
         """
+        d = v.message_digest
+        cached = self._past_cache.get(d)
+        if cached is not None:
+            return {self.vertices[dd] for dd in cached if dd in self.vertices}
+
         visited: set[bytes] = set()
-        stack = [v.message_digest]
+        stack = [d]
 
         while stack:
             current = stack.pop()
@@ -136,7 +145,8 @@ class LamportGraph:
                 if neighbor in self.vertices and neighbor not in visited:
                     stack.append(neighbor)
 
-        return {self.vertices[d] for d in visited if d in self.vertices}
+        self._past_cache[d] = frozenset(visited)
+        return {self.vertices[dd] for dd in visited if dd in self.vertices}
 
     def future(self, v: Vertex) -> set[Vertex]:
         """All vertices that are causally after v (including v itself)."""
