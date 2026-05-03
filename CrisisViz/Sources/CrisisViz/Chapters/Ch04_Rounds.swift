@@ -6,6 +6,7 @@ struct Ch04_Rounds: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
     private var dataStep: Int { sceneIndex + 2 }  // steps 2, 3, 4
 
@@ -26,14 +27,14 @@ struct Ch04_Rounds: View {
         let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: sim.nodes,
                                         canvasSize: size, margin: 60)
         let minRound = vertices.map { $0.round }.min() ?? 0
-        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm)
-        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, alpha: 0.4)
+        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm, textScale: settings.textScale)
+        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, alpha: 0.4, textScale: settings.textScale)
         layout.drawEdges(in: &context, edges: edges, alpha: 0.3)
 
         // Highlight isLast vertices (round boundary markers) with bright rings
         let roundMarkers = Set(vertices.filter { $0.isLast }.map { $0.digestHex })
         layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
-                           showLabels: true, showWeight: true, highlightSet: roundMarkers)
+                           showLabels: true, showWeight: true, highlightSet: roundMarkers, textScale: settings.textScale)
 
         // Weight bars per round at the bottom
         let rounds = Dictionary(grouping: vertices, by: { $0.round })
@@ -66,7 +67,7 @@ struct Ch04_Rounds: View {
             // Label
             context.draw(
                 Text("R\(round): Σw=\(totalWeight)")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5)),
                 at: CGPoint(x: x + barW / 2, y: barY + barHeight + 12)
             )
@@ -75,14 +76,14 @@ struct Ch04_Rounds: View {
         // isLast annotation
         context.draw(
             Text("○ = isLast (ROUND BOUNDARY) — WEIGHT TRIGGERS TRANSITION")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.yellow.opacity(0.4)),
             at: CGPoint(x: size.width / 2, y: barY - 16)
         )
 
         context.draw(
             Text("\(snap.vertices.count) VERTICES · MAX ROUND \(snap.maxRound)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.2)),
             at: CGPoint(x: size.width / 2, y: 14)
         )

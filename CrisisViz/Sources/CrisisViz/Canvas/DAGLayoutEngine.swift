@@ -8,17 +8,17 @@ struct DAGLayout {
     let roundBoundaries: [CGFloat]    // x positions of round separators
 
     // MARK: - Consistent type scale (all monospaced)
+    //
+    // These are functions, not static lets, so the global text-scale slider
+    // (AppSettings.textScale) flows into every Canvas-drawn label. Callers
+    // pass `scale: settings.textScale` from the chapter view; drawing methods
+    // accept and forward a `textScale` parameter.
 
-    /// Tiny labels inside/beside vertices
-    static let fontVertex: Font = .system(size: 10, weight: .medium, design: .monospaced)
-    /// Small annotation text (round labels, lane names, counts)
-    static let fontCaption: Font = .system(size: 11, weight: .bold, design: .monospaced)
-    /// Medium overlay text (annotations, inspection data)
-    static let fontBody: Font = .system(size: 12, weight: .medium, design: .monospaced)
-    /// Large annotation (section headers, key callouts)
-    static let fontHeading: Font = .system(size: 14, weight: .heavy, design: .monospaced)
-    /// Banner/title text
-    static let fontTitle: Font = .system(size: 16, weight: .heavy, design: .monospaced)
+    static func fontVertex(scale: Double = 1.0) -> Font  { .system(size: 10 * scale, weight: .medium, design: .monospaced) }
+    static func fontCaption(scale: Double = 1.0) -> Font { .system(size: 11 * scale, weight: .bold,   design: .monospaced) }
+    static func fontBody(scale: Double = 1.0) -> Font    { .system(size: 12 * scale, weight: .medium, design: .monospaced) }
+    static func fontHeading(scale: Double = 1.0) -> Font { .system(size: 14 * scale, weight: .heavy,  design: .monospaced) }
+    static func fontTitle(scale: Double = 1.0) -> Font   { .system(size: 16 * scale, weight: .heavy,  design: .monospaced) }
 
     /// Compute layout for a set of vertices within a given canvas size.
     static func compute(
@@ -139,7 +139,8 @@ extension DAGLayout {
         animationTime: Double = 1000,       // large default = all visible
         highlightSet: Set<String>? = nil,
         subset: Set<String>? = nil,
-        visibleCount: Int? = nil            // if set, only show first N vertices (sorted by round)
+        visibleCount: Int? = nil,           // if set, only show first N vertices (sorted by round)
+        textScale: Double = 1.0
     ) {
         let filteredVertices: [VertexData]
         if let subset {
@@ -205,7 +206,7 @@ extension DAGLayout {
                 let label = String(vertex.digestHex.prefix(4))
                 context.draw(
                     Text(label)
-                        .font(Self.fontVertex)
+                        .font(Self.fontVertex(scale: textScale))
                         .foregroundColor(.white.opacity(0.9 * appear)),
                     at: CGPoint(x: pos.x, y: pos.y + radius + 10)
                 )
@@ -218,7 +219,8 @@ extension DAGLayout {
         in context: inout GraphicsContext,
         canvasSize: CGSize,
         minRound: Int,
-        alpha: Double = 0.25
+        alpha: Double = 0.25,
+        textScale: Double = 1.0
     ) {
         for (i, x) in roundBoundaries.enumerated() {
             // Vertical separator
@@ -233,7 +235,7 @@ extension DAGLayout {
             let roundNum = minRound + i
             context.draw(
                 Text("R\(roundNum)")
-                    .font(Self.fontCaption)
+                    .font(Self.fontCaption(scale: textScale))
                     .foregroundColor(.white.opacity(alpha)),
                 at: CGPoint(x: x + 20, y: 16)
             )
@@ -241,10 +243,10 @@ extension DAGLayout {
     }
 
     /// Draw "NO GLOBAL CLOCK" banner
-    func drawNoClockBanner(in context: inout GraphicsContext, canvasSize: CGSize, alpha: Double = 0.3) {
+    func drawNoClockBanner(in context: inout GraphicsContext, canvasSize: CGSize, alpha: Double = 0.3, textScale: Double = 1.0) {
         context.draw(
             Text("NO GLOBAL CLOCK — ASYNC GOSSIP")
-                .font(Self.fontHeading)
+                .font(Self.fontHeading(scale: textScale))
                 .foregroundColor(.white.opacity(alpha)),
             at: CGPoint(x: canvasSize.width / 2, y: canvasSize.height - 20)
         )
@@ -256,7 +258,8 @@ extension DAGLayout {
         nodes: [NodeMeta],
         canvasSize: CGSize,
         margin: CGFloat = 60,
-        dm: DataManager
+        dm: DataManager,
+        textScale: Double = 1.0
     ) {
         let usableHeight = canvasSize.height - margin * 2
         let laneHeight = usableHeight / CGFloat(max(nodes.count, 1))
@@ -274,7 +277,7 @@ extension DAGLayout {
             let label = node.isByzantine ? "BYZ" : String(node.name.suffix(1))
             context.draw(
                 Text(label)
-                    .font(Self.fontCaption)
+                    .font(Self.fontCaption(scale: textScale))
                     .foregroundColor(color.opacity(0.5)),
                 at: CGPoint(x: 30, y: y)
             )

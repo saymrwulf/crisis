@@ -6,6 +6,7 @@ struct Ch08_DA_Problem: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         Canvas { context, size in
@@ -82,7 +83,7 @@ struct Ch08_DA_Problem: View {
         // Labels
         context.draw(
             Text("PUSH-BASED GOSSIP")
-                .font(.system(size: 18, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3)),
             at: CGPoint(x: cx, y: 50)
         )
@@ -97,7 +98,7 @@ struct Ch08_DA_Problem: View {
                       with: .color(.green.opacity(0.3)), lineWidth: 1)
         context.draw(
             Text("✓ FIREHOSE FOR THE PRESENT")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.green.opacity(0.7)),
             at: CGPoint(x: leftBox.midX, y: leftBox.midY)
         )
@@ -109,7 +110,7 @@ struct Ch08_DA_Problem: View {
                       with: .color(.red.opacity(0.3)), lineWidth: 1)
         context.draw(
             Text("✕ NOT A DATABASE FOR THE PAST")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.red.opacity(0.7)),
             at: CGPoint(x: rightBox.midX, y: rightBox.midY)
         )
@@ -157,7 +158,7 @@ struct Ch08_DA_Problem: View {
             // Node label
             context.draw(
                 Text("N\(i)")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.6)),
                 at: pos
             )
@@ -180,7 +181,7 @@ struct Ch08_DA_Problem: View {
                 let flash = 0.5 + 0.5 * sin(time * 5 + Double(i))
                 context.draw(
                     Text("!")
-                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                         .foregroundColor(.red.opacity(0.6 * flash)),
                     at: CGPoint(x: pos.x + r + 4, y: pos.y - r - 4)
                 )
@@ -190,7 +191,7 @@ struct Ch08_DA_Problem: View {
         // "EXISTING NETWORK" label
         context.draw(
             Text("EXISTING NETWORK")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.25)),
             at: CGPoint(x: netCenter.x, y: netCenter.y + netRadius + 36)
         )
@@ -212,7 +213,7 @@ struct Ch08_DA_Problem: View {
                           with: .color(.yellow.opacity(0.3)), lineWidth: 1)
             context.draw(
                 Text("NEW")
-                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
                     .foregroundColor(.black.opacity(0.8)),
                 at: newPos
             )
@@ -221,7 +222,7 @@ struct Ch08_DA_Problem: View {
         // "JOINERS" label
         context.draw(
             Text("\(joiners) JOINER\(joiners > 1 ? "S" : "")")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.yellow.opacity(0.4)),
             at: CGPoint(x: size.width * 0.8, y: cy + CGFloat(joiners) * 40 + 30)
         )
@@ -253,13 +254,13 @@ struct Ch08_DA_Problem: View {
                           with: .color(.orange.opacity(0.25 * annotAppear)), lineWidth: 1)
             context.draw(
                 Text("COST = O(HISTORY) × JOINERS")
-                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
                     .foregroundColor(.orange.opacity(0.7 * annotAppear)),
                 at: CGPoint(x: annotBox.midX, y: annotBox.midY - 8)
             )
             context.draw(
                 Text("each joiner replays entire DAG via gossip")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .medium, design: .monospaced))
                     .foregroundColor(.orange.opacity(0.4 * annotAppear)),
                 at: CGPoint(x: annotBox.midX, y: annotBox.midY + 10)
             )
@@ -293,14 +294,14 @@ struct Ch08_DA_Problem: View {
 
         context.draw(
             Text("NETWORK BANDWIDTH: \(Int(fillPct * 100))%")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.5)),
             at: CGPoint(x: cx, y: barY + barH + 14)
         )
 
         context.draw(
             Text("THE BOOTSTRAPPING PROBLEM — GOSSIP DOESN'T SCALE FOR HISTORY REPLAY")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                 .foregroundColor(.orange.opacity(0.5)),
             at: CGPoint(x: cx, y: size.height - 30)
         )
@@ -378,21 +379,21 @@ struct Ch08_DA_Problem: View {
         let countFlash = 0.6 + 0.4 * sin(time * 4)
         context.draw(
             Text("SYBIL NODES: \(sybilCount)")
-                .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(14), weight: .heavy, design: .monospaced))
                 .foregroundColor(.red.opacity(countFlash)),
             at: CGPoint(x: size.width * 0.75, y: 80)
         )
 
         context.draw(
             Text("BANDWIDTH: \(Int(fillPct * 100))% — NETWORK COLLAPSE")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.red.opacity(0.5)),
             at: CGPoint(x: cx, y: barY + barH + 14)
         )
 
         context.draw(
             Text("10,000 SYBIL NODES REQUEST FULL HISTORY — HONEST NETWORK DROWNS")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                 .foregroundColor(.red.opacity(0.5)),
             at: CGPoint(x: cx, y: size.height - 40)
         )
@@ -416,25 +417,25 @@ struct Ch08_DA_Problem: View {
 
         context.draw(
             Text("CRISIS")
-                .font(.system(size: 24, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(24), weight: .heavy, design: .monospaced))
                 .foregroundColor(.green.opacity(0.8 * appear)),
             at: CGPoint(x: leftRect.midX, y: leftRect.midY - 30)
         )
         context.draw(
             Text("CONSENSUS LAYER")
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(12), weight: .bold, design: .monospaced))
                 .foregroundColor(.green.opacity(0.5 * appear)),
             at: CGPoint(x: leftRect.midX, y: leftRect.midY)
         )
         context.draw(
             Text("deterministic ordering")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.green.opacity(0.4 * appear)),
             at: CGPoint(x: leftRect.midX, y: leftRect.midY + 20)
         )
         context.draw(
             Text("from DAG structure")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.green.opacity(0.3 * appear)),
             at: CGPoint(x: leftRect.midX, y: leftRect.midY + 36)
         )
@@ -448,25 +449,25 @@ struct Ch08_DA_Problem: View {
 
         context.draw(
             Text("DA LAYER")
-                .font(.system(size: 24, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(24), weight: .heavy, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.8 * appear)),
             at: CGPoint(x: rightRect.midX, y: rightRect.midY - 30)
         )
         context.draw(
             Text("STORAGE & RETRIEVAL")
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(12), weight: .bold, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.5 * appear)),
             at: CGPoint(x: rightRect.midX, y: rightRect.midY)
         )
         context.draw(
             Text("erasure coding")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.4 * appear)),
             at: CGPoint(x: rightRect.midX, y: rightRect.midY + 20)
         )
         context.draw(
             Text("incentivized storage")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.3 * appear)),
             at: CGPoint(x: rightRect.midX, y: rightRect.midY + 36)
         )
@@ -489,7 +490,7 @@ struct Ch08_DA_Problem: View {
 
             context.draw(
                 Text("HASH COMMITMENTS")
-                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
                     .foregroundColor(.white.opacity(0.4 * arrowAppear)),
                 at: CGPoint(x: cx, y: cy - 20)
             )
@@ -497,7 +498,7 @@ struct Ch08_DA_Problem: View {
 
         context.draw(
             Text("TWO SEPARATE LAYERS — COUPLED ONLY BY CRYPTOGRAPHIC HASHES")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3 * appear)),
             at: CGPoint(x: cx, y: size.height - 40)
         )

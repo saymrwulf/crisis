@@ -7,6 +7,7 @@ struct Ch03_Partition: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
     // Partition config: honest-6 and honest-7 are isolated
     private let isolatedProcessIds = Set(["1058280f", "9e42015f"])
@@ -94,7 +95,7 @@ struct Ch03_Partition: View {
 
             context.draw(
                 Text(node.name.suffix(1))
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                     .foregroundColor(.white),
                 at: CGPoint(x: x, y: y)
             )
@@ -108,7 +109,7 @@ struct Ch03_Partition: View {
             for yOff in [-40.0, 0.0, 40.0] {
                 context.draw(
                     Text("✕")
-                        .font(.system(size: 16, weight: .heavy))
+                        .font(.system(size: settings.scaled(16), weight: .heavy))
                         .foregroundColor(.red.opacity(breakAlpha * 0.7)),
                     at: CGPoint(x: midX, y: cy + yOff)
                 )
@@ -117,7 +118,7 @@ struct Ch03_Partition: View {
 
         context.draw(
             Text("NETWORK PARTITION — 2 NODES ISOLATED")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.red.opacity(0.4)),
             at: CGPoint(x: cx, y: size.height - 30)
         )
@@ -144,14 +145,14 @@ struct Ch03_Partition: View {
             canvasSize: leftSize, margin: 40
         )
         let minRound = snap.vertices.map { $0.round }.min() ?? 0
-        majorityLayout.drawRoundSeparators(in: &context, canvasSize: leftSize, minRound: minRound, alpha: 0.1)
+        majorityLayout.drawRoundSeparators(in: &context, canvasSize: leftSize, minRound: minRound, alpha: 0.1, textScale: settings.textScale)
         majorityLayout.drawEdges(in: &context, edges: snap.edges, alpha: 0.3)
         majorityLayout.drawVertices(in: &context, vertices: snap.vertices, nodes: sim.nodes, dm: dm,
-                                   showLabels: false, animationTime: time)
+                                   showLabels: false, animationTime: time, textScale: settings.textScale)
 
         context.draw(
             Text("MAJORITY: \(snap.vertices.count) VERTICES")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                 .foregroundColor(.cyan.opacity(0.6)),
             at: CGPoint(x: midX * 0.5, y: 20)
         )
@@ -175,18 +176,18 @@ struct Ch03_Partition: View {
         )
         isolatedLayout.drawEdges(in: &rightContext, edges: isolatedEdges, alpha: 0.3)
         isolatedLayout.drawVertices(in: &rightContext, vertices: isolatedVertices, nodes: sim.nodes, dm: dm,
-                                   showLabels: false, animationTime: time)
+                                   showLabels: false, animationTime: time, textScale: settings.textScale)
 
         context.draw(
             Text("ISOLATED: \(isolatedVertices.count) VERTICES")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                 .foregroundColor(.orange.opacity(0.6)),
             at: CGPoint(x: midX + midX * 0.5, y: 20)
         )
 
         context.draw(
             Text("SAME ALGORITHM — DIFFERENT GRAPH → DIFFERENT REALITY")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3)),
             at: CGPoint(x: midX, y: size.height - 20)
         )
@@ -202,13 +203,13 @@ struct Ch03_Partition: View {
         let flash = 0.5 + 0.5 * sin(time * 2)
         context.draw(
             Text("MAJORITY VOTES: LEADER = 0dd9...")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.cyan.opacity(flash)),
             at: CGPoint(x: size.width * 0.25, y: size.height - 60)
         )
         context.draw(
             Text("ISOLATED VOTES: LEADER = ???")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.orange.opacity(flash)),
             at: CGPoint(x: size.width * 0.75, y: size.height - 60)
         )
@@ -225,11 +226,11 @@ struct Ch03_Partition: View {
         )
 
         let minRound = snap.vertices.map { $0.round }.min() ?? 0
-        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm)
-        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound)
+        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm, textScale: settings.textScale)
+        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, textScale: settings.textScale)
         layout.drawEdges(in: &context, edges: snap.edges, alpha: 0.3)
         layout.drawVertices(in: &context, vertices: snap.vertices, nodes: sim.nodes, dm: dm,
-                           showLabels: true, animationTime: time)
+                           showLabels: true, animationTime: time, textScale: settings.textScale)
 
         // Flood animation: particles flowing from left to right
         let floodProgress = min(1.0, time * 0.15)
@@ -246,7 +247,7 @@ struct Ch03_Partition: View {
 
         context.draw(
             Text("RECONNECTED — GOSSIP FLOODS THE GAP — \(snap.vertices.count) VERTICES CONVERGED")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.green.opacity(0.5)),
             at: CGPoint(x: size.width / 2, y: size.height - 30)
         )

@@ -6,8 +6,11 @@ struct Ch06_Leader: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
-    private let dataStep = 7
+    // Convergence happens at step 31 — pick a step shortly after so the
+    // elected leader is recorded and visible to this chapter.
+    private let dataStep = 31
 
     var body: some View {
         Canvas { context, size in
@@ -27,7 +30,7 @@ struct Ch06_Leader: View {
         let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: sim.nodes,
                                         canvasSize: dagSize, margin: 50)
         let minRound = vertices.map { $0.round }.min() ?? 0
-        layout.drawRoundSeparators(in: &context, canvasSize: dagSize, minRound: minRound, alpha: 0.2)
+        layout.drawRoundSeparators(in: &context, canvasSize: dagSize, minRound: minRound, alpha: 0.2, textScale: settings.textScale)
         layout.drawEdges(in: &context, edges: edges, alpha: 0.3)
 
         // Find candidates: isLast vertices in a specific round (e.g., round 3)
@@ -39,14 +42,14 @@ struct Ch06_Leader: View {
         let winner = candidates.first
 
         layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
-                           showLabels: true, showWeight: true, highlightSet: candidateSet)
+                           showLabels: true, showWeight: true, highlightSet: candidateSet, textScale: settings.textScale)
 
         // Winner crown
         if let winner, let pos = layout.positions[winner.digestHex] {
             let crown = 0.6 + 0.4 * sin(time * 3)
             context.draw(
                 Text("★ LEADER")
-                    .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                     .foregroundColor(.yellow.opacity(crown)),
                 at: CGPoint(x: pos.x, y: pos.y - 22)
             )
@@ -80,13 +83,13 @@ struct Ch06_Leader: View {
             // Labels
             context.draw(
                 Text("w=\(candidate.weight)")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.7)),
                 at: CGPoint(x: x + barW / 2, y: chartY + chartH + 14)
             )
             context.draw(
                 Text(String(candidate.digestHex.prefix(6)))
-                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
                     .foregroundColor(.white.opacity(0.4)),
                 at: CGPoint(x: x + barW / 2, y: chartY + chartH + 26)
             )
@@ -97,7 +100,7 @@ struct Ch06_Leader: View {
             : "HIGHEST WEIGHT WINS — UNPREDICTABLE HASH LOTTERY"
         context.draw(
             Text(subtitle)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.yellow.opacity(0.4)),
             at: CGPoint(x: size.width / 2, y: chartY - 14)
         )

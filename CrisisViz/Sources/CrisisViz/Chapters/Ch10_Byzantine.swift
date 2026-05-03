@@ -6,6 +6,7 @@ struct Ch10_Byzantine: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         Canvas { context, size in
@@ -75,7 +76,7 @@ struct Ch10_Byzantine: View {
             let label = isByz ? "BYZ" : String(node.name.suffix(1))
             context.draw(
                 Text(label)
-                    .font(.system(size: isByz ? 10 : 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(isByz ? 10 : 9), weight: .bold, design: .monospaced))
                     .foregroundColor(.white),
                 at: pos
             )
@@ -96,7 +97,7 @@ struct Ch10_Byzantine: View {
                 let y = size.height * 0.7 + CGFloat(i) * 22
                 context.draw(
                     Text(attack)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(.system(size: settings.scaled(11), weight: .medium, design: .monospaced))
                         .foregroundColor(.red.opacity(0.5 * attackAlpha)),
                     at: CGPoint(x: cx, y: y)
                 )
@@ -104,7 +105,7 @@ struct Ch10_Byzantine: View {
 
             context.draw(
                 Text("THE ATTACKER — 1 BYZANTINE NODE IN A NETWORK OF \(nodes.count)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                     .foregroundColor(.red.opacity(0.5)),
                 at: CGPoint(x: cx, y: 30)
             )
@@ -140,7 +141,7 @@ struct Ch10_Byzantine: View {
 
             context.draw(
                 Text("BYZANTINE: \(byzCount)/\(nodes.count) < \(threshold + 1)/\(nodes.count) THRESHOLD")
-                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
                     .foregroundColor(.green.opacity(0.7 * shieldAppear)),
                 at: CGPoint(x: cx, y: thresholdY)
             )
@@ -166,7 +167,7 @@ struct Ch10_Byzantine: View {
             context.stroke(threshLine, with: .color(.green.opacity(0.7 * shieldAppear)), lineWidth: 2)
             context.draw(
                 Text("1/3")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                     .foregroundColor(.green.opacity(0.5 * shieldAppear)),
                 at: CGPoint(x: threshX, y: barY + barH + 12)
             )
@@ -184,7 +185,7 @@ struct Ch10_Byzantine: View {
                 let itemAppear = min(1.0, max(0, time * 0.2 - Double(i) * 0.15))
                 context.draw(
                     Text(defense)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(.system(size: settings.scaled(11), weight: .medium, design: .monospaced))
                         .foregroundColor(.green.opacity(0.6 * itemAppear)),
                     at: CGPoint(x: cx, y: y)
                 )
@@ -192,7 +193,7 @@ struct Ch10_Byzantine: View {
 
             context.draw(
                 Text("WHY ATTACKS FAIL")
-                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(14), weight: .heavy, design: .monospaced))
                     .foregroundColor(.green.opacity(0.5 * shieldAppear)),
                 at: CGPoint(x: cx, y: 30)
             )

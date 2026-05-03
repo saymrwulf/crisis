@@ -6,8 +6,10 @@ struct Ch07_Order: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
-    private let dataStep = 9  // use final step with most totalPosition data
+    // Post-convergence step (leader-decided round produces ordered prefix at step 31).
+    private let dataStep = 33
 
     var body: some View {
         Canvas { context, size in
@@ -70,7 +72,7 @@ struct Ch07_Order: View {
             if vertexProgress > 0.8 {
                 context.draw(
                     Text("\(i + 1)")
-                        .font(.system(size: max(6, radius * 0.7), weight: .bold, design: .monospaced))
+                        .font(.system(size: settings.scaled(max(6, radius * 0.7)), weight: .bold, design: .monospaced))
                         .foregroundColor(.white.opacity(0.8)),
                     at: CGPoint(x: pos.x, y: pos.y + radius + 8)
                 )
@@ -80,7 +82,7 @@ struct Ch07_Order: View {
             if vertexProgress > 0.9 && stripSpacing > 20 {
                 context.draw(
                     Text(String(vertex.digestHex.prefix(4)))
-                        .font(.system(size: 6, weight: .regular, design: .monospaced))
+                        .font(.system(size: settings.scaled(6), weight: .regular, design: .monospaced))
                         .foregroundColor(.white.opacity(0.3)),
                     at: CGPoint(x: pos.x, y: pos.y + radius + 18)
                 )
@@ -104,7 +106,7 @@ struct Ch07_Order: View {
 
             context.draw(
                 Text("→ TOTAL ORDER")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.2)),
                 at: CGPoint(x: size.width - stripMargin - 50, y: stripY + 30)
             )
@@ -118,14 +120,14 @@ struct Ch07_Order: View {
 
         context.draw(
             Text(subtitle)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.cyan.opacity(0.4)),
             at: CGPoint(x: size.width / 2, y: size.height - 30)
         )
 
         context.draw(
             Text("\(ordered.count) ORDERED / \(vertices.count) TOTAL")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.2)),
             at: CGPoint(x: size.width / 2, y: 14)
         )

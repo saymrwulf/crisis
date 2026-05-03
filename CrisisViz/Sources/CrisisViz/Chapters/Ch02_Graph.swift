@@ -13,6 +13,7 @@ struct Ch02_Graph: View {
     let engine: SceneEngine
     let dm: DataManager
     let inspection: InspectionState
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         GeometryReader { geo in
@@ -28,7 +29,7 @@ struct Ch02_Graph: View {
             .overlay(alignment: .topTrailing) {
                 if sceneIndex >= 1 {
                     Text("CLICK ANY VERTEX TO INSPECT")
-                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .scaledFont(size: 10, weight: .heavy, design: .monospaced)
                         .foregroundStyle(.yellow.opacity(0.55))
                         .kerning(1.4)
                         .padding(.horizontal, 10)
@@ -141,9 +142,9 @@ struct Ch02_Graph: View {
 
         // Draw infrastructure
         let minRound = allVertices.map { $0.round }.min() ?? 0
-        layout.drawNodeLanes(in: &context, nodes: nodes, canvasSize: size, dm: dm)
-        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound)
-        layout.drawNoClockBanner(in: &context, canvasSize: size)
+        layout.drawNodeLanes(in: &context, nodes: nodes, canvasSize: size, dm: dm, textScale: settings.textScale)
+        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, textScale: settings.textScale)
+        layout.drawNoClockBanner(in: &context, canvasSize: size, textScale: settings.textScale)
 
         // Draw edges — clearly visible
         layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.3, lineWidth: 1.2)
@@ -153,12 +154,12 @@ struct Ch02_Graph: View {
         case 0:
             // Async gossip begins — vertices appear progressively
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount)
+                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
 
         case 1:
             // DAG grows
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount)
+                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
 
         case 2:
             // Tip references highlighted
@@ -166,13 +167,13 @@ struct Ch02_Graph: View {
             let tips = Set(visibleVerts.map { $0.digestHex }).subtracting(referencedSet)
 
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, highlightSet: tips, visibleCount: visCount)
+                              showLabels: true, highlightSet: tips, visibleCount: visCount, textScale: settings.textScale)
 
             for tipHex in tips {
                 if let pos = layout.positions[tipHex] {
                     context.draw(
                         Text("TIP")
-                            .font(DAGLayout.fontCaption)
+                            .font(DAGLayout.fontCaption(scale: settings.textScale))
                             .foregroundColor(.yellow.opacity(0.9)),
                         at: CGPoint(x: pos.x, y: pos.y - 20)
                     )
@@ -181,7 +182,7 @@ struct Ch02_Graph: View {
 
             context.draw(
                 Text("NEW MESSAGES REFERENCE ONLY THE TIPS — TRANSITIVE COMMITMENT")
-                    .font(DAGLayout.fontHeading)
+                    .font(DAGLayout.fontHeading(scale: settings.textScale))
                     .foregroundColor(.yellow.opacity(0.5)),
                 at: CGPoint(x: size.width / 2, y: size.height - 50)
             )
@@ -189,7 +190,7 @@ struct Ch02_Graph: View {
         case 3:
             // Hash inspection
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount)
+                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
 
             // Pick a vertex near the middle of the visible range for inspection
             let midIdx = visibleVerts.count / 2
@@ -232,19 +233,19 @@ struct Ch02_Graph: View {
                     let digestStr = String(inspected.digestFull.prefix(28))
                     context.draw(
                         Text("digest: \(digestStr)...")
-                            .font(DAGLayout.fontBody)
+                            .font(DAGLayout.fontBody(scale: settings.textScale))
                             .foregroundColor(.yellow.opacity(0.9)),
                         at: CGPoint(x: boxRect.midX, y: boxRect.minY + 20)
                     )
                     context.draw(
                         Text("round: \(inspected.round)  weight: \(inspected.weight)  isLast: \(String(describing: inspected.isLast))")
-                            .font(DAGLayout.fontBody)
+                            .font(DAGLayout.fontBody(scale: settings.textScale))
                             .foregroundColor(.white.opacity(0.7)),
                         at: CGPoint(x: boxRect.midX, y: boxRect.minY + 42)
                     )
                     context.draw(
                         Text("payload: \(inspected.payloadStr)")
-                            .font(DAGLayout.fontBody)
+                            .font(DAGLayout.fontBody(scale: settings.textScale))
                             .foregroundColor(.white.opacity(0.7)),
                         at: CGPoint(x: boxRect.midX, y: boxRect.minY + 64)
                     )
@@ -254,7 +255,7 @@ struct Ch02_Graph: View {
         case 4:
             // Commit-reveal
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount)
+                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
 
             let parentMap = buildParentMap(edges: visibleEdges)
             // Pick a vertex with parents that's well within the visible area (not at edges)
@@ -268,7 +269,7 @@ struct Ch02_Graph: View {
                     let labelY = cp.y > size.height * 0.3 ? cp.y - 34 : cp.y + 34
                     context.draw(
                         Text("hash(C) = \(String(child.digestHex.prefix(8)))...")
-                            .font(DAGLayout.fontHeading)
+                            .font(DAGLayout.fontHeading(scale: settings.textScale))
                             .foregroundColor(.white.opacity(0.9)),
                         at: CGPoint(x: cp.x, y: labelY)
                     )
@@ -281,7 +282,7 @@ struct Ch02_Graph: View {
                                         with: .color(.red.opacity(0.2 * flash)))
                             context.draw(
                                 Text("HIDDEN")
-                                    .font(DAGLayout.fontCaption)
+                                    .font(DAGLayout.fontCaption(scale: settings.textScale))
                                     .foregroundColor(.red.opacity(0.8 * flash)),
                                 at: CGPoint(x: pp.x, y: pp.y - 18)
                             )
@@ -293,19 +294,19 @@ struct Ch02_Graph: View {
         case 5:
             // Graph identity
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount)
+                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
 
             let alpha = 0.5 + 0.2 * sin(time * 1.5)
             context.draw(
                 Text("SAME MESSAGES → SAME GRAPH — DETERMINISTIC")
-                    .font(DAGLayout.fontTitle)
+                    .font(DAGLayout.fontTitle(scale: settings.textScale))
                     .foregroundColor(.cyan.opacity(alpha)),
                 at: CGPoint(x: size.width / 2, y: size.height / 2)
             )
 
         case 6:
             // Recursive expansion — full graph
-            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm, showLabels: true)
+            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm, showLabels: true, textScale: settings.textScale)
 
             let chain = findChainToGenesis(vertices: visibleVerts, edges: visibleEdges)
             for hex in chain {
@@ -329,19 +330,19 @@ struct Ch02_Graph: View {
 
             context.draw(
                 Text("RECURSIVE HASH CHAIN — EVERY VERTEX TRACES BACK TO GENESIS")
-                    .font(DAGLayout.fontHeading)
+                    .font(DAGLayout.fontHeading(scale: settings.textScale))
                     .foregroundColor(.yellow.opacity(0.5)),
                 at: CGPoint(x: size.width / 2, y: size.height - 50)
             )
 
         default:
-            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm, showLabels: true)
+            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm, showLabels: true, textScale: settings.textScale)
         }
 
         // Vertex count — top center
         context.draw(
             Text("\(visCount)/\(allVertices.count) VERTICES · \(visibleEdges.count) EDGES")
-                .font(DAGLayout.fontCaption)
+                .font(DAGLayout.fontCaption(scale: settings.textScale))
                 .foregroundColor(.white.opacity(0.25)),
             at: CGPoint(x: size.width / 2, y: 16)
         )

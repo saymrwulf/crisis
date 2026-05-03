@@ -22,9 +22,9 @@ from crisis.recorder import EventRecorder, EventType
 
 
 def export_simulation(
-    num_honest: int = 8,
+    num_honest: int = 6,
     num_byzantine: int = 1,
-    num_steps: int = 10,
+    num_steps: int = 35,
     pow_zeros: int = 1,
     difficulty: int = 1,
     connectivity_k: int = 0,
@@ -40,6 +40,9 @@ def export_simulation(
         connectivity_k=connectivity_k,
         seed=seed,
         recorder=recorder,
+        # Realistic network: per-link delays, drops, occasional silences and bursts.
+        # Tests/CLI keep the synchronous default; the visualizer wants realism.
+        synchronous=False,
     )
     sim.run(num_steps=num_steps, verbose=False)
 
@@ -144,9 +147,9 @@ def _clean_data(data: dict) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Export Crisis simulation to JSON")
-    parser.add_argument("--nodes", type=int, default=8)
+    parser.add_argument("--nodes", type=int, default=6)
     parser.add_argument("--byzantine", type=int, default=1)
-    parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument("--steps", type=int, default=35)
     parser.add_argument("--pow-zeros", type=int, default=1)
     parser.add_argument("--difficulty", type=int, default=1)
     parser.add_argument("--connectivity-k", type=int, default=0)

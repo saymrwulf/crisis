@@ -84,6 +84,13 @@ def build_knowledge_graph(vertex: Vertex, round_s: int,
     # Find all round-s vertices in v's past
     round_s_vertices = [v for v in past if v.round == round_s]
 
+    # Pre-initialize entries for every round-s id so the cross-reference pass
+    # below (which may touch edges keyed by an id we haven't reached yet in
+    # the outer loop) can't KeyError.
+    for v_s in round_s_vertices:
+        kg.edges.setdefault(v_s.id, set())
+        kg.weights.setdefault(v_s.id, 0)
+
     # Group by id and compute weights
     for v_s in round_s_vertices:
         vid = v_s.id

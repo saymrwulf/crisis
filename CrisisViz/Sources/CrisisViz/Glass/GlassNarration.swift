@@ -14,7 +14,7 @@ struct GlassNarration: View {
                 // Chapter badge + collapse toggle
                 HStack(spacing: 6) {
                     Text(chapterTitle)
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .scaledFont(size: 10, weight: .bold, design: .monospaced)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
@@ -31,12 +31,12 @@ struct GlassNarration: View {
                 if isExpanded {
                     // Scene title
                     Text(title)
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .scaledFont(size: 13, weight: .bold, design: .monospaced)
                         .foregroundStyle(.primary)
 
                     // Body text
                     Text(narration)
-                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .scaledFont(size: 11, weight: .regular, design: .monospaced)
                         .foregroundStyle(.primary.opacity(0.85))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)

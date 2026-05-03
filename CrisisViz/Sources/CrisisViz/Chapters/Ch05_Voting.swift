@@ -6,8 +6,11 @@ struct Ch05_Voting: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
-    private let dataStep = 5
+    // Mid-simulation: enough rounds have formed for SVPs to be visible,
+    // but the protocol hasn't yet decided a leader (that happens at step 31).
+    private let dataStep = 18
 
     var body: some View {
         Canvas { context, size in
@@ -25,8 +28,8 @@ struct Ch05_Voting: View {
         let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: sim.nodes,
                                         canvasSize: size, margin: 60)
         let minRound = vertices.map { $0.round }.min() ?? 0
-        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm)
-        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, alpha: 0.3)
+        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm, textScale: settings.textScale)
+        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, alpha: 0.3, textScale: settings.textScale)
         layout.drawEdges(in: &context, edges: edges, alpha: 0.3)
 
         // Find a candidate (round 1 isLast) and a deciding vertex (round 3+)
@@ -50,12 +53,12 @@ struct Ch05_Voting: View {
         case 0:
             // No vote messages — just graph
             layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
-                              showLabels: true, animationTime: time)
+                              showLabels: true, animationTime: time, textScale: settings.textScale)
 
             let alpha = 0.4 + 0.2 * sin(time * 1.5)
             context.draw(
                 Text("NO VOTE MESSAGES — VOTES INFERRED FROM GRAPH PATHS")
-                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
                     .foregroundColor(.green.opacity(alpha)),
                 at: CGPoint(x: size.width / 2, y: size.height / 2)
             )
@@ -63,7 +66,7 @@ struct Ch05_Voting: View {
         case 1:
             // SVP trace highlighted
             layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
-                              showLabels: true, highlightSet: svpSet)
+                              showLabels: true, highlightSet: svpSet, textScale: settings.textScale)
 
             // Draw SVP path edges in green
             for i in 0..<(svpPath.count - 1) {
@@ -82,7 +85,7 @@ struct Ch05_Voting: View {
             if let cPos = layout.positions[svpPath.first ?? ""] {
                 context.draw(
                     Text("CANDIDATE")
-                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                         .foregroundColor(.green),
                     at: CGPoint(x: cPos.x, y: cPos.y - 18)
                 )
@@ -90,7 +93,7 @@ struct Ch05_Voting: View {
             if let dPos = layout.positions[svpPath.last ?? ""] {
                 context.draw(
                     Text("DECIDER")
-                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                         .foregroundColor(.green),
                     at: CGPoint(x: dPos.x, y: dPos.y - 18)
                 )
@@ -98,7 +101,7 @@ struct Ch05_Voting: View {
 
             context.draw(
                 Text("SVP: STRONGLY-SEEING PATH — \(svpPath.count) VERTICES")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                     .foregroundColor(.green.opacity(0.5)),
                 at: CGPoint(x: size.width / 2, y: size.height - 30)
             )
@@ -106,7 +109,7 @@ struct Ch05_Voting: View {
         case 2:
             // Deterministic outcome
             layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
-                              showLabels: true, highlightSet: svpSet)
+                              showLabels: true, highlightSet: svpSet, textScale: settings.textScale)
 
             // Draw all SVP edges
             for i in 0..<(svpPath.count - 1) {
@@ -121,18 +124,18 @@ struct Ch05_Voting: View {
 
             context.draw(
                 Text("SAME GRAPH → SAME PATHS → SAME VOTES — DETERMINISTIC")
-                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
                     .foregroundColor(.green.opacity(0.4 + 0.2 * sin(time * 1.5))),
                 at: CGPoint(x: size.width / 2, y: size.height - 30)
             )
 
         default:
-            layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm, showLabels: true)
+            layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm, showLabels: true, textScale: settings.textScale)
         }
 
         context.draw(
             Text("\(vertices.count) VERTICES · STEP \(dataStep)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.2)),
             at: CGPoint(x: size.width / 2, y: 14)
         )

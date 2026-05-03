@@ -6,6 +6,7 @@ struct Ch09_DA_Design: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         Canvas { context, size in
@@ -45,7 +46,7 @@ struct Ch09_DA_Design: View {
                       with: .color(.white.opacity(0.3 * origAlpha)), lineWidth: 1.5)
         context.draw(
             Text("MESSAGE PAYLOAD")
-                .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7 * origAlpha)),
             at: CGPoint(x: origRect.midX, y: origRect.midY)
         )
@@ -80,13 +81,13 @@ struct Ch09_DA_Design: View {
             let typeLabel = i < k ? "data" : "parity"
             context.draw(
                 Text(label)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.8 * splitProgress)),
                 at: CGPoint(x: rect.midX, y: rect.midY - 6)
             )
             context.draw(
                 Text(typeLabel)
-                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
                     .foregroundColor(.white.opacity(0.4 * splitProgress)),
                 at: CGPoint(x: rect.midX, y: rect.midY + 10)
             )
@@ -117,7 +118,7 @@ struct Ch09_DA_Design: View {
                                 with: .color(chunkColors[i].opacity(0.3 * distributeProgress)))
                     context.draw(
                         Text("S\(i + 1)")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                             .foregroundColor(.white.opacity(0.6 * distributeProgress)),
                         at: storePos
                     )
@@ -128,13 +129,13 @@ struct Ch09_DA_Design: View {
         // Labels
         context.draw(
             Text("ERASURE CODING: \(k)-of-\(n) REDUNDANCY")
-                .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(14), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4)),
             at: CGPoint(x: cx, y: 30)
         )
         context.draw(
             Text("ANY \(k) CHUNKS SUFFICE TO RECONSTRUCT — NO FULL REPLICATION NEEDED")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.cyan.opacity(0.4)),
             at: CGPoint(x: cx, y: size.height - 40)
         )
@@ -186,7 +187,7 @@ struct Ch09_DA_Design: View {
             let hashLabel = isLeaf ? "chunk\(index)" : "h(\(index))"
             context.draw(
                 Text(hashLabel)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5 * appear)),
                 at: CGPoint(x: pos.x, y: pos.y + nodeR + 8)
             )
@@ -201,13 +202,13 @@ struct Ch09_DA_Design: View {
 
         context.draw(
             Text("MERKLE TREE OF CHUNKS")
-                .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(14), weight: .heavy, design: .monospaced))
                 .foregroundColor(.purple.opacity(0.5)),
             at: CGPoint(x: cx, y: 30)
         )
         context.draw(
             Text("YELLOW PATH = PROOF — VERIFY ANY CHUNK WITHOUT DOWNLOADING ALL")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.yellow.opacity(0.4)),
             at: CGPoint(x: cx, y: size.height - 40)
         )
@@ -224,10 +225,10 @@ struct Ch09_DA_Design: View {
         let zR: CGFloat = 30
         let zRect = CGRect(x: zPos.x - zR, y: zPos.y - zR, width: zR * 2, height: zR * 2)
         context.fill(Circle().path(in: zRect), with: .color(.yellow.opacity(0.8)))
-        context.draw(Text("Z").font(.system(size: 16, weight: .heavy, design: .monospaced)).foregroundColor(.black), at: zPos)
+        context.draw(Text("Z").font(.system(size: settings.scaled(16), weight: .heavy, design: .monospaced)).foregroundColor(.black), at: zPos)
         context.draw(
             Text("REQUESTER")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.yellow.opacity(0.5)),
             at: CGPoint(x: zPos.x, y: zPos.y + zR + 14)
         )
@@ -237,10 +238,10 @@ struct Ch09_DA_Design: View {
         let sR: CGFloat = 30
         let sRect = CGRect(x: sPos.x - sR, y: sPos.y - sR, width: sR * 2, height: sR * 2)
         context.fill(Circle().path(in: sRect), with: .color(.blue.opacity(0.8)))
-        context.draw(Text("S").font(.system(size: 16, weight: .heavy, design: .monospaced)).foregroundColor(.white), at: sPos)
+        context.draw(Text("S").font(.system(size: settings.scaled(16), weight: .heavy, design: .monospaced)).foregroundColor(.white), at: sPos)
         context.draw(
             Text("STORAGE NODE")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.5)),
             at: CGPoint(x: sPos.x, y: sPos.y + sR + 14)
         )
@@ -253,7 +254,7 @@ struct Ch09_DA_Design: View {
                       with: .color(.yellow.opacity(0.3)), lineWidth: 1)
         context.draw(
             Text("REQUEST + FEE (anti-sybil)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.yellow.opacity(0.6)),
             at: CGPoint(x: feeBox.midX, y: feeBox.midY)
         )
@@ -291,7 +292,7 @@ struct Ch09_DA_Design: View {
                           with: .color(.blue.opacity(0.3 * respProgress)), lineWidth: 1)
             context.draw(
                 Text("CHUNK + MERKLE PROOF")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                     .foregroundColor(.blue.opacity(0.6 * respProgress)),
                 at: CGPoint(x: respBox.midX, y: respBox.midY)
             )
@@ -299,13 +300,13 @@ struct Ch09_DA_Design: View {
 
         context.draw(
             Text("POINT-TO-POINT RETRIEVAL — NOT BROADCAST")
-                .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3)),
             at: CGPoint(x: cx, y: 40)
         )
         context.draw(
             Text("REQUESTING COSTS SOMETHING → SYBIL ATTACK BECOMES EXPENSIVE")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.green.opacity(0.4)),
             at: CGPoint(x: cx, y: size.height - 40)
         )
@@ -373,7 +374,7 @@ struct Ch09_DA_Design: View {
 
             context.draw(
                 Text("SUPPLY")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                     .foregroundColor(.green.opacity(0.6)),
                 at: CGPoint(x: origin.x + graphW * supplyAppear + 30, y: origin.y - graphH * 0.8 * supplyAppear * supplyAppear)
             )
@@ -409,7 +410,7 @@ struct Ch09_DA_Design: View {
 
             context.draw(
                 Text("DEMAND")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                     .foregroundColor(.orange.opacity(0.6)),
                 at: CGPoint(x: origin.x + graphW * demandAppear + 30,
                              y: origin.y - graphH * 0.9 + graphH * 0.8 * demandAppear * demandAppear)
@@ -447,13 +448,13 @@ struct Ch09_DA_Design: View {
 
             context.draw(
                 Text("P*")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5)),
                 at: CGPoint(x: origin.x - 14, y: eqY)
             )
             context.draw(
                 Text("Q*")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5)),
                 at: CGPoint(x: eqX, y: origin.y + 14)
             )
@@ -461,7 +462,7 @@ struct Ch09_DA_Design: View {
             // Equilibrium label
             context.draw(
                 Text("EQUILIBRIUM PRICE")
-                    .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                     .foregroundColor(.white.opacity(0.4)),
                 at: CGPoint(x: eqX + 60, y: eqY - 14)
             )
@@ -470,13 +471,13 @@ struct Ch09_DA_Design: View {
         // Axis labels
         context.draw(
             Text("PRICE (fee per chunk)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.35)),
             at: CGPoint(x: origin.x - 10, y: origin.y - graphH / 2)
         )
         context.draw(
             Text("QUANTITY (storage served)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.35)),
             at: CGPoint(x: origin.x + graphW / 2, y: origin.y + 30)
         )
@@ -494,13 +495,13 @@ struct Ch09_DA_Design: View {
                       with: .color(.green.opacity(0.2)), lineWidth: 1)
         context.draw(
             Text("POPULAR DATA")
-                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                 .foregroundColor(.green.opacity(0.6)),
             at: CGPoint(x: popRect.midX, y: popRect.midY - 10)
         )
         context.draw(
             Text("many providers → low fee")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.green.opacity(0.35)),
             at: CGPoint(x: popRect.midX, y: popRect.midY + 8)
         )
@@ -513,26 +514,26 @@ struct Ch09_DA_Design: View {
                       with: .color(.orange.opacity(0.2)), lineWidth: 1)
         context.draw(
             Text("RARE DATA")
-                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                 .foregroundColor(.orange.opacity(0.6)),
             at: CGPoint(x: rareRect.midX, y: rareRect.midY - 10)
         )
         context.draw(
             Text("few providers → premium fee")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.orange.opacity(0.35)),
             at: CGPoint(x: rareRect.midX, y: rareRect.midY + 8)
         )
 
         context.draw(
             Text("INCENTIVIZED STORAGE — FEE MARKET DISCOVERY")
-                .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(14), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3)),
             at: CGPoint(x: cx, y: 30)
         )
         context.draw(
             Text("STORAGE NODES EARN FEES — PRICE DISCOVERY EMERGES NATURALLY")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.orange.opacity(0.4)),
             at: CGPoint(x: cx, y: size.height - 30)
         )
@@ -556,13 +557,13 @@ struct Ch09_DA_Design: View {
                       with: .color(.green.opacity(0.5 * appear)), lineWidth: 2)
         context.draw(
             Text("CRISIS CONSENSUS")
-                .font(.system(size: 18, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
                 .foregroundColor(.green.opacity(0.7 * appear)),
             at: CGPoint(x: topRect.midX, y: topRect.midY - 12)
         )
         context.draw(
             Text("DAG · PoW · Virtual Voting · Total Order")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.green.opacity(0.4 * appear)),
             at: CGPoint(x: topRect.midX, y: topRect.midY + 12)
         )
@@ -575,13 +576,13 @@ struct Ch09_DA_Design: View {
                       with: .color(.blue.opacity(0.5 * appear)), lineWidth: 2)
         context.draw(
             Text("DATA AVAILABILITY LAYER")
-                .font(.system(size: 18, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.7 * appear)),
             at: CGPoint(x: botRect.midX, y: botRect.midY - 12)
         )
         context.draw(
             Text("Erasure Coding · Merkle Proofs · Fee Market")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
                 .foregroundColor(.blue.opacity(0.4 * appear)),
             at: CGPoint(x: botRect.midX, y: botRect.midY + 12)
         )
@@ -607,7 +608,7 @@ struct Ch09_DA_Design: View {
 
             context.draw(
                 Text("HASH COMMITMENTS")
-                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
                     .foregroundColor(.white.opacity(0.35 * arrowAppear)),
                 at: CGPoint(x: cx, y: cy)
             )
@@ -615,7 +616,7 @@ struct Ch09_DA_Design: View {
 
         context.draw(
             Text("NODES PAY FOR WHAT THEY NEED — TWO LAYERS, ONE PROTOCOL")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3 * appear)),
             at: CGPoint(x: cx, y: size.height - 40)
         )

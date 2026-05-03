@@ -11,6 +11,7 @@ struct Ch01_Problem: View {
     let localTime: Double
     let engine: SceneEngine
     let dm: DataManager
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         Canvas { context, size in
@@ -110,7 +111,7 @@ struct Ch01_Problem: View {
             // Node label inside circle
             context.draw(
                 Text("Node \(i + 1)")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(14), weight: .bold, design: .monospaced))
                     .foregroundColor(.white),
                 at: pos
             )
@@ -143,7 +144,7 @@ struct Ch01_Problem: View {
                               with: .color(txColor.opacity(0.55 * alpha)), lineWidth: 1)
                 context.draw(
                     Text(tx)
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .font(.system(size: settings.scaled(13), weight: .bold, design: .monospaced))
                         .foregroundColor(txColor.opacity(0.95 * alpha)),
                     at: pillCenter
                 )
@@ -218,7 +219,7 @@ struct Ch01_Problem: View {
             let flash = 0.5 + 0.5 * sin(time * 2.5 + Double(i))
             context.draw(
                 Text("?")
-                    .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(22), weight: .heavy, design: .monospaced))
                     .foregroundColor(.yellow.opacity(flash * 0.85)),
                 at: mid
             )
@@ -249,13 +250,13 @@ struct Ch01_Problem: View {
             let label = node.isByzantine ? "BYZ" : String(node.name.suffix(1))
             context.draw(
                 Text(label)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
                     .foregroundColor(.white),
                 at: pos
             )
             context.draw(
                 Text(node.processIdHex.prefix(4))
-                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
                     .foregroundColor(.white.opacity(0.4)),
                 at: CGPoint(x: pos.x, y: pos.y + nodeRadius + 10)
             )
@@ -277,7 +278,7 @@ struct Ch01_Problem: View {
         let qAlpha = min(1.0, max(0, (time - 1.0) * 0.4))
         context.draw(
             Text("HOW DO WE AGREE?")
-                .font(.system(size: 36, weight: .heavy, design: .monospaced))
+                .font(.system(size: settings.scaled(36), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(qAlpha * 0.85)),
             at: CGPoint(x: size.width / 2, y: size.height / 2)
         )
@@ -285,7 +286,7 @@ struct Ch01_Problem: View {
         let subAlpha = min(1.0, max(0, (time - 2.5) * 0.4))
         context.draw(
             Text("WITH NO CENTRAL CLOCK · NO TRUSTED THIRD PARTY · BYZANTINE PARTICIPANTS")
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .font(.system(size: settings.scaled(12), weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(subAlpha * 0.55)),
             at: CGPoint(x: size.width / 2, y: size.height / 2 + 44)
         )
