@@ -15,18 +15,27 @@ struct ImmersiveView: View {
     var body: some View {
         ZStack {
             // Single TimelineView at the top — chapters are pure renderers below.
+            // The chapter is wrapped in an HStack with the persistent CastSidebar
+            // (left) and LegendSidebar (right). Chapters never know about the
+            // sidebars; they just see a slightly narrower canvas. The sidebars
+            // are part of the scene rather than overlays so they morph naturally
+            // alongside chapter content rather than floating on top of it.
             TimelineView(.animation(minimumInterval: 1.0 / 60)) { timeline in
                 let localTime = engine.localTime(at: timeline.date)
-                SceneRouter(
-                    address: engine.address,
-                    localTime: localTime,
-                    engine: engine,
-                    dm: dm,
-                    inspection: inspection
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .id(engine.address.chapter)  // recreate only on chapter change
-                .transition(.opacity)
+                HStack(spacing: 0) {
+                    CastSidebar()
+                    SceneRouter(
+                        address: engine.address,
+                        localTime: localTime,
+                        engine: engine,
+                        dm: dm,
+                        inspection: inspection
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(engine.address.chapter)  // recreate only on chapter change
+                    .transition(.opacity)
+                    LegendSidebar()
+                }
                 .background(.black)
             }
 

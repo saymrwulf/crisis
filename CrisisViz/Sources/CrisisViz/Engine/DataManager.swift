@@ -9,8 +9,14 @@ final class DataManager {
     /// Node colors keyed by processIdHex
     private(set) var nodeColors: [String: Color] = [:]
 
-    /// Node names keyed by processIdHex
+    /// Node names keyed by processIdHex (display names, e.g. "Aaron").
+    /// We deliberately overwrite the simulation's "honest-0/byzantine-0"
+    /// names with the cast names here so every existing call site that
+    /// renders `nodeNames[pid]` automatically picks up the new naming.
     private(set) var nodeNames: [String: String] = [:]
+
+    /// Persistent cast assignment built at load time. See `Cast.swift`.
+    private(set) var castByPid: [String: CastRole] = [:]
 
     // Palette: distinct colors for up to 9 nodes
     static let palette: [Color] = [
@@ -64,9 +70,15 @@ final class DataManager {
     }
 
     private func buildLookups(_ data: SimulationData) {
-        for (i, node) in data.nodes.enumerated() {
-            nodeColors[node.processIdHex] = Self.palette[min(i, Self.palette.count - 1)]
-            nodeNames[node.processIdHex] = node.name
+        // Cast assignment is the source of truth for both name and color now.
+        // The legacy palette is kept on the type for any non-cast call site
+        // that still indexes into it.
+        let cast = Cast.buildAssignment(nodes: data.nodes)
+        castByPid = cast
+        for node in data.nodes {
+            let role = cast[node.processIdHex]
+            nodeColors[node.processIdHex] = role?.color ?? Cast.muted
+            nodeNames[node.processIdHex]  = role?.displayName ?? node.name
         }
     }
 
@@ -74,6 +86,54 @@ final class DataManager {
     func colorIndex(for processIdHex: String) -> Int {
         guard let sim else { return 0 }
         return sim.nodes.firstIndex(where: { $0.processIdHex == processIdHex }) ?? 0
+    }
+
+    /// Cast lookup: the named role this validator plays in the story.
+    /// Returns a muted "Peer-N" placeholder for unknown PIDs so callers
+    /// don't have to handle nil.
+    func castRole(for processIdHex: String) -> CastRole {
+        castByPid[processIdHex] ?? Cast.peer(0)
+    }
+
+    /// Direct color lookup that respects the cast assignment.
+    /// Prefer this over indexing into `palette` for any new code.
+    func castColor(for processIdHex: String) -> Color {
+        castByPid[processIdHex]?.color ?? Cast.muted
+    }
+
+    /// Lane index 0..3 for the four leads, or nil for muted peers.
+    /// Used by the lane-and-rounds layout so every chapter places Aaron at
+    /// lane 0, Ben at lane 1, Carl at lane 2, Dave at lane 3.
+    func laneIndex(for processIdHex: String) -> Int? {
+        guard let role = castByPid[processIdHex], role.isNamedCast else { return nil }
+        return Cast.leads.firstIndex(where: { $0.id == role.id })
+    }
+
+    /// Nodes in cast lane order (Aaron → Ben → Carl → Dave) followed by any
+    /// muted peers. Pass this into `DAGLayout.compute(...)`'s `nodes:`
+    /// parameter so the layout's vertical ordering matches the CastSidebar
+    /// — Dave ends up just below Carl rather than at the bottom of the
+    /// list of seven simulation nodes.
+    func castOrderedNodes() -> [NodeMeta] {
+        guard let sim else { return [] }
+        let pidToNode = Dictionary(uniqueKeysWithValues: sim.nodes.map { ($0.processIdHex, $0) })
+
+        // Look up each cast lead by id, then by finding the pid assigned to that role.
+        var ordered: [NodeMeta] = []
+        var taken = Set<String>()
+        for lead in Cast.leads {
+            // First pid whose role.id == lead.id
+            if let pid = castByPid.first(where: { $0.value.id == lead.id })?.key,
+               let node = pidToNode[pid] {
+                ordered.append(node)
+                taken.insert(pid)
+            }
+        }
+        // Append any remaining (muted peers, etc.) in their original order.
+        for node in sim.nodes where !taken.contains(node.processIdHex) {
+            ordered.append(node)
+        }
+        return ordered
     }
 
     /// Get snapshot for a given step (clamped)
