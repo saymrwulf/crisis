@@ -40,7 +40,7 @@ struct Ch05_Voting: View {
     }
 
     private func render(context: inout GraphicsContext, size: CGSize, time: Double) {
-        guard let sim = dm.sim,
+        guard dm.sim != nil,
               let snap = dm.honestData(step: dataStep) else { return }
 
         let nodes = dm.castOrderedNodes()  // Aaron, Ben, Carl, Dave at top — peers below
