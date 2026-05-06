@@ -191,34 +191,28 @@ struct Ch02_Graph: View {
             layout.drawNoClockBanner(in: &context, canvasSize: size, textScale: settings.textScale)
         }
 
-        // Scene-specific rendering
+        // Scene-specific rendering. Scenes 0/1/2/3 all share ONE renderer
+        // (`renderGossipBeats`) so the writing-and-flying slow-motion that
+        // scene 3 dramatizes is also visible in the staged scenes — and
+        // there's no hard cut from the staged beat into the dramatization
+        // (the user's `6/36 → 7/36` complaint). Each scene maps its 0..N
+        // local seconds onto a different time window of the gossip script
+        // so each one zooms into a different beat:
+        //
+        //   Scene 0 (8s)  → script   0..6.5  : Aaron composes α, seals, sends
+        //   Scene 1 (8s)  → script   4..14   : α flies to Ben, Ben writes β
+        //   Scene 2 (8s)  → script   9..21   : Carl receives α, writes γ before β arrives
+        //   Scene 3 (24s) → script   0..24   : full asynchronous timeline
+        //
+        // The cast circles always sit ON their lanes (lifeline rule), the
+        // perspective panel rides the top of the canvas, and the same
+        // composing/flight overlays drive every scene.
         switch sceneIndex {
-        case 0, 1, 2:
-            renderStagedBeat(in: &context, size: size, time: time,
-                             layout: layout, visibleVerts: visibleVerts,
-                             visibleEdges: visibleEdges, snap: snap)
-            // Per-character perspective panel — at the TOP of the canvas
-            // (the BOTTOM is reserved for `GlassNarration`, which would
-            // otherwise hide the panel in the live app even though the MP4
-            // testbed renders it). The "knows" set for each cast member is
-            // derived from the parent edges of the currently visible
-            // staged vertices, NOT from the full step-5 snapshot — so the
-            // panel never names a vertex that isn't on screen.
-            drawStagedPerspectivePanel(
-                in: &context, size: size, time: time,
-                visibleVerts: visibleVerts, visibleEdges: visibleEdges
-            )
-
-        case 3:
-            // Scene 3 is now the dedicated slow-motion gossip dramatization.
-            // It uses a hand-crafted GossipScript instead of simulation
-            // snapshots — the simulation can't show the asymmetric
-            // arrival timing, line-by-line message composition, or
-            // perspective-bubble updates the user explicitly asked for.
-            // The original "click any vertex" inspect feature is still
-            // available globally; we don't need to instruct it here.
-            renderGossipDramatization(in: &context, size: size, time: time)
-            return  // skip the dense-graph rendering below
+        case 0, 1, 2, 3:
+            let scriptT: Double = scriptTimeForScene(sceneIndex, sceneTime: time)
+            renderGossipBeats(in: &context, size: size,
+                              sceneTime: time, scriptT: scriptT)
+            return
 
         case 30:  // unreachable; kept so original case 3 logic stays as ref
             layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.3, lineWidth: 1.2)
@@ -878,63 +872,105 @@ struct Ch02_Graph: View {
 
     // MARK: - Slow-motion gossip dramatization (scene 3)
 
-    /// Render the scripted gossip animation. At any local time t we project
-    /// `GossipScript.ch01.state(at: t)` into:
-    ///   - Four cast bubbles at the four corners of the canvas
-    ///   - Composing boxes near each author currently writing a message
-    ///   - In-flight rectangles flying along the line between sender and recipient
-    ///   - View bubbles that grow as messages are read
-    /// The user asked for "extreme slow motion" — beats use 1-5 second
-    /// durations so the eye can follow each step.
-    private func renderGossipDramatization(
-        in context: inout GraphicsContext, size: CGSize, time: Double
+    /// Map the local time in scene 0..3 onto a window of the GossipScript
+    /// timeline. Each scene zooms into the slice of the script that
+    /// matches its narration; scene 3 runs the full 24-second script.
+    private func scriptTimeForScene(_ sceneIdx: Int, sceneTime t: Double) -> Double {
+        switch sceneIdx {
+        case 0:
+            // 0..8 → 0..6.5 (Aaron composes α, seals, starts sending)
+            return (t / 8.0) * 6.5
+        case 1:
+            // 0..8 → 4..14 (α flies to Ben/Carl, Ben composes β, sends)
+            return 4.0 + (t / 8.0) * 10.0
+        case 2:
+            // 0..8 → 9..22 (α arrives at Carl, Carl composes γ before β,
+            // β arrives late at Carl, γ flies)
+            return 9.0 + (t / 8.0) * 13.0
+        case 3:
+            // 0..24 → 0..24 (full timeline replay)
+            return t
+        default:
+            return 0
+        }
+    }
+
+    /// Lane center Y — must mirror `DAGLayoutEngine.compute`'s lane math so
+    /// cast circles in the gossip dramatization sit on the same horizontal
+    /// axis as the cast vertices in the rest of the chapter.
+    private func castLaneY(_ laneIdx: Int, size: CGSize) -> CGFloat {
+        let margin: CGFloat = 60
+        let nodeCount = max(7, dm.castOrderedNodes().count)
+        let laneHeight = (size.height - 2 * margin) / CGFloat(nodeCount)
+        return margin + (CGFloat(laneIdx) + 0.5) * laneHeight
+    }
+
+    /// Unified gossip-beat renderer. Scenes 0/1/2/3 all funnel through
+    /// this — each with its own `scriptT` window. Cast circles stay on
+    /// their lanes (lifeline rule), composing happens in a fixed
+    /// top-center slot just below the perspective panel, flight envelopes
+    /// glide between cast positions, and the perspective panel is fed
+    /// from `GossipScript.state` so the panel ✓/✗ marks update in
+    /// lockstep with the writing/flight beats.
+    private func renderGossipBeats(
+        in context: inout GraphicsContext, size: CGSize,
+        sceneTime: Double, scriptT: Double
     ) {
         let script = GossipScript.ch01
-        let world = script.state(at: time)
+        let world = script.state(at: scriptT)
 
-        // Position each cast member at a fixed point. We use a 3-up layout
-        // (Aaron top-left, Ben top-right, Carl bottom-center) so message
-        // flight paths are wide and the in-flight rectangles are clearly
-        // visible. Dave is not in this dramatization yet (he debuts in
-        // Ch02 partition).
-        let cx = size.width / 2
-        // Cast positions sit BELOW the perspective panel band (panel spans
-        // y=14..110 + caption at y=120). The lower triangle keeps Aaron/Ben
-        // above the dramatization mid-band and Carl in the lower third.
+        // Cast positions sit ON THEIR LANES (Aaron lane 0, Ben lane 1,
+        // Carl lane 2) at staircased X so flight paths read as clean
+        // diagonals.
+        let aaronY = castLaneY(0, size: size)
+        let benY   = castLaneY(1, size: size)
+        let carlY  = castLaneY(2, size: size)
         let layout: [GossipScript.CastRoleKey: CGPoint] = [
-            .aaron: CGPoint(x: cx - size.width * 0.30, y: size.height * 0.34),
-            .ben:   CGPoint(x: cx + size.width * 0.30, y: size.height * 0.34),
-            .carl:  CGPoint(x: cx,                     y: size.height * 0.70),
+            .aaron: CGPoint(x: size.width * 0.20, y: aaronY),
+            .ben:   CGPoint(x: size.width * 0.50, y: benY),
+            .carl:  CGPoint(x: size.width * 0.80, y: carlY),
         ]
 
-        // Tiny clock in the bottom-right so the user can pace the scene
-        // without the title fighting the perspective panel for top space.
+        // Tiny script-time stamp in the corner so the user can pace
+        // without the title fighting the panel for the top of the canvas.
         context.draw(
-            Text(String(format: "t=%.1fs / %.0fs", time, script.totalDuration))
+            Text(String(format: "scriptT=%.1fs", scriptT))
                 .font(.system(size: settings.scaled(9), weight: .regular, design: .monospaced))
-                .foregroundColor(.white.opacity(0.30)),
-            at: CGPoint(x: size.width - 64, y: size.height - 12)
+                .foregroundColor(.white.opacity(0.28)),
+            at: CGPoint(x: size.width - 70, y: size.height - 12)
         )
 
-        // 1. Each cast member's "node + view bubble" rendered first as the
-        //    backdrop. Bubbles list every message they've absorbed (with
-        //    progress 1.0). Bubbles grow gracefully on arrival.
+        // 1. Cast circles + view bubbles. Pass an explicit `bubbleSide`
+        //    so Aaron/Ben hang their bubbles to the right and Carl hangs
+        //    his to the left, regardless of NSScreen geometry.
+        let bubbleSides: [GossipScript.CastRoleKey: BubbleSide] = [
+            .aaron: .right, .ben: .right, .carl: .left
+        ]
         for (key, pos) in layout {
-            drawCastBubble(in: &context, at: pos, key: key,
-                          view: world.views[key] ?? GossipScript.ViewState(),
-                          script: script,
-                          spotlight: world.spotlight?.0 == key,
-                          time: time)
+            drawCastBubble(
+                in: &context, at: pos, key: key,
+                view: world.views[key] ?? GossipScript.ViewState(),
+                script: script,
+                spotlight: world.spotlight?.0 == key,
+                bubbleSide: bubbleSides[key] ?? .right,
+                time: scriptT
+            )
         }
 
-        // 2. Composing-in-progress messages rendered next to their author.
-        for c in world.composing {
-            let authorPos = layout[c.author] ?? .zero
-            drawComposingBox(in: &context, anchor: authorPos, composing: c)
+        // 2. Composing-in-progress message rendered in a fixed top-center
+        //    slot just under the perspective panel — author's color
+        //    highlights the box, with a colored connector linking the
+        //    box to the author so the viewer knows who is at the keyboard.
+        if let composing = world.composing.first,
+           let authorPos = layout[composing.author] {
+            drawComposingSlot(
+                in: &context, canvasSize: size,
+                composing: composing, authorPos: authorPos
+            )
         }
 
-        // 3. In-flight messages: small rectangles moving along the path from
-        //    sender to recipient. Drawn last so they appear on top of bubbles.
+        // 3. In-flight envelopes glide along the diagonal between cast
+        //    lanes. Drawn after circles so they read as "above" them.
         for f in world.inFlight {
             guard let src = layout[f.from], let dst = layout[f.to] else { continue }
             let p = CGFloat(f.progress)
@@ -944,38 +980,40 @@ struct Ch02_Graph: View {
                                from: src, to: dst, progress: f.progress)
         }
 
-        // 4. Caption explaining the punch line at the end of the script.
-        if time > 19 {
-            let alpha = min(1.0, (time - 19) / 1.5)
+        // 4. Caption tied to scriptT (not sceneTime) so the same beat
+        //    surfaces the same caption regardless of which scene is
+        //    hosting that slice of the script.
+        let cx = size.width / 2
+        let captionY = size.height - 30
+        let captionText: String?
+        let captionColor: Color
+        if scriptT > 19 {
+            captionText = "CARL'S γ DOES NOT REFERENCE β — HE WROTE γ BEFORE β ARRIVED. ASYMMETRY IS THE NORM."
+            captionColor = .yellow.opacity(0.85)
+        } else if scriptT > 13 {
+            captionText = "BEN HAS α. HE WRITES β REFERENCING α. CARL ALSO RECEIVED α — INDEPENDENTLY."
+            captionColor = .white.opacity(0.7)
+        } else if scriptT > 4 {
+            captionText = "AARON'S α TRAVELS — TWO COPIES, ONE TO BEN, ONE TO CARL, AT DIFFERENT SPEEDS."
+            captionColor = .white.opacity(0.7)
+        } else if scriptT > 0.5 {
+            captionText = "AARON IS WRITING THE FIRST MESSAGE. NO ONE ELSE KNOWS IT YET."
+            captionColor = Cast.coral.opacity(0.9)
+        } else {
+            captionText = nil
+            captionColor = .clear
+        }
+        if let captionText {
             context.draw(
-                Text("CARL'S γ DOES NOT REFERENCE β — HE WROTE γ BEFORE β ARRIVED. ASYMMETRY IS THE NORM.")
+                Text(captionText)
                     .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                    .foregroundColor(.yellow.opacity(0.85 * alpha)),
-                at: CGPoint(x: cx, y: size.height - 30)
-            )
-        } else if time > 13 {
-            context.draw(
-                Text("BEN HAS α. HE WRITES β REFERENCING α. CARL ALSO RECEIVED α — INDEPENDENTLY.")
-                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.65)),
-                at: CGPoint(x: cx, y: size.height - 30)
-            )
-        } else if time > 4 {
-            context.draw(
-                Text("AARON'S α TRAVELS — TWO COPIES, ONE TO BEN, ONE TO CARL, AT DIFFERENT SPEEDS.")
-                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.65)),
-                at: CGPoint(x: cx, y: size.height - 30)
+                    .foregroundColor(captionColor),
+                at: CGPoint(x: cx, y: captionY)
             )
         }
 
-        // Perspective panel at the top — same component used by the staged
-        // scenes 0/1/2, just fed from the live `GossipScript` state. A
-        // message counts as "known" once the receive beat has finished
-        // (progress = 1.0); authors know their own message immediately on
-        // sealHash. This makes the asymmetric arrival timing visible at a
-        // glance ("Carl writes γ before β arrives" → COMMON KNOWLEDGE
-        // contains only α even after Ben writes β).
+        // 5. Perspective panel at the top — fed from the live gossip
+        //    state so ✓ / ✗ flips track the writing/flight beats below.
         let items: [PanelItem] = [
             PanelItem(label: "α", id: "α", color: Cast.coral),
             PanelItem(label: "β", id: "β", color: Cast.teal),
@@ -986,7 +1024,7 @@ struct Ch02_Graph: View {
             return Set(view.received.compactMap { $0.value >= 1.0 ? $0.key : nil })
         }
         drawPerspectivePanel(
-            in: &context, size: size, time: time,
+            in: &context, size: size, time: sceneTime,
             items: items,
             aaronKnows: gossipKnows(.aaron),
             benKnows:   gossipKnows(.ben),
@@ -994,12 +1032,81 @@ struct Ch02_Graph: View {
         )
     }
 
+    enum BubbleSide { case left, right }
+
+    /// Composing slot — fixed top-center box just below the perspective
+    /// panel that surfaces whichever cast member is currently writing. A
+    /// thin colored connector ties the box to the author's cast circle so
+    /// the viewer can see who is at the keyboard.
+    private func drawComposingSlot(
+        in context: inout GraphicsContext, canvasSize: CGSize,
+        composing: GossipScript.ComposingMessage, authorPos: CGPoint
+    ) {
+        let boxW: CGFloat = 260
+        let boxH: CGFloat = 72
+        // Position just under the perspective panel band (panel y=14..110
+        // + caption at y=120). 132 leaves a 12pt gap.
+        let boxRect = CGRect(
+            x: canvasSize.width / 2 - boxW / 2,
+            y: 132,
+            width: boxW, height: boxH
+        )
+        let color = composing.author.role.color
+
+        // Connector line from box bottom to the author's cast circle top
+        // edge — gives the viewer an unambiguous link.
+        var connector = Path()
+        connector.move(to: CGPoint(x: boxRect.midX, y: boxRect.maxY))
+        connector.addLine(to: CGPoint(x: authorPos.x, y: authorPos.y - 40))
+        context.stroke(connector,
+                      with: .color(color.opacity(0.45)),
+                      style: StrokeStyle(lineWidth: 1.4, dash: [3, 3]))
+
+        context.fill(RoundedRectangle(cornerRadius: 8).path(in: boxRect),
+                    with: .color(.black.opacity(0.85)))
+        context.stroke(RoundedRectangle(cornerRadius: 8).path(in: boxRect),
+                      with: .color(color.opacity(0.95)), lineWidth: 1.5)
+
+        context.draw(
+            Text("✎ \(composing.author.role.displayName.uppercased()) WRITING")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(color),
+            at: CGPoint(x: boxRect.midX, y: boxRect.minY + 12)
+        )
+
+        // Lines fill in progressively. Thresholds make each line feel
+        // deliberate — payload first, parents next, then the PoW-derived
+        // hash once it's been "computed".
+        let lines: [(String, threshold: Double)] = [
+            ("payload: \(composing.message.payload)", 0.20),
+            ("parents: \(composing.message.parents.isEmpty ? "(genesis)" : composing.message.parents.joined(separator: ", "))", 0.50),
+            ("hash:    \(composing.progress > 0.85 ? composing.message.hashShort + "…" : "computing PoW…")", 0.85),
+        ]
+        var rowY = boxRect.minY + 30
+        for (text, threshold) in lines {
+            if composing.progress < threshold { continue }
+            let alpha = min(1.0, (composing.progress - threshold) / 0.10)
+            context.draw(
+                Text(text)
+                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.85 * alpha)),
+                at: CGPoint(x: boxRect.minX + 12, y: rowY),
+                anchor: .leading
+            )
+            rowY += 14
+        }
+    }
+
     /// Cast member node — circle in their cast color with name underneath, plus
-    /// a "view bubble" showing absorbed message hashes.
+    /// a "view bubble" showing absorbed message hashes. `bubbleSide` is
+    /// explicit so the dramatization can place each cast's view bubble on
+    /// a guaranteed-clear side regardless of NSScreen geometry.
     private func drawCastBubble(
         in context: inout GraphicsContext, at pos: CGPoint,
         key: GossipScript.CastRoleKey, view: GossipScript.ViewState,
-        script: GossipScript, spotlight: Bool, time: Double
+        script: GossipScript, spotlight: Bool,
+        bubbleSide: BubbleSide = .right,
+        time: Double
     ) {
         let role = key.role
         let radius: CGFloat = 38
@@ -1035,7 +1142,7 @@ struct Ch02_Graph: View {
         // side the bubble sits on.
         let bubbleW: CGFloat = 130
         let bubbleH: CGFloat = 110
-        let bubbleX: CGFloat = pos.x < (NSScreen.main?.frame.width ?? 1400) / 2
+        let bubbleX: CGFloat = bubbleSide == .right
             ? pos.x + r + 18
             : pos.x - r - 18 - bubbleW
         let bubbleRect = CGRect(x: bubbleX, y: pos.y - bubbleH / 2,
@@ -1074,57 +1181,6 @@ struct Ch02_Graph: View {
                     .foregroundColor(.white.opacity(0.3)),
                 at: CGPoint(x: bubbleRect.midX, y: bubbleRect.midY + 4)
             )
-        }
-    }
-
-    /// A message body being composed — appears near the author with lines
-    /// filling in proportional to compose progress.
-    private func drawComposingBox(
-        in context: inout GraphicsContext, anchor: CGPoint,
-        composing: GossipScript.ComposingMessage
-    ) {
-        let boxW: CGFloat = 200
-        let boxH: CGFloat = 80
-        // Place above the author node, with a small offset so it doesn't
-        // overlap the cast circle.
-        let boxRect = CGRect(x: anchor.x - boxW / 2,
-                              y: anchor.y - 100 - boxH / 2,
-                              width: boxW, height: boxH)
-        let color = composing.author.role.color
-        context.fill(RoundedRectangle(cornerRadius: 8).path(in: boxRect),
-                    with: .color(.black.opacity(0.85)))
-        context.stroke(RoundedRectangle(cornerRadius: 8).path(in: boxRect),
-                      with: .color(color.opacity(0.9)), lineWidth: 1.5)
-
-        // Header: writer + composing indicator
-        context.draw(
-            Text("✎ \(composing.author.role.displayName.uppercased()) WRITING")
-                .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
-                .foregroundColor(color),
-            at: CGPoint(x: boxRect.midX, y: boxRect.minY + 11)
-        )
-
-        // Lines that fill in progressively. We schematically show 4 fields:
-        // 1) payload, 2) parent hashes, 3) own hash (only after seal),
-        // 4) PoW nonce.
-        let lines: [(String, threshold: Double)] = [
-            ("payload: \(composing.message.payload)", 0.20),
-            ("parents: \(composing.message.parents.isEmpty ? "(genesis)" : composing.message.parents.joined(separator: ", "))", 0.50),
-            ("hash:    \(composing.progress > 0.85 ? composing.message.hashShort + "…" : "computing PoW…")", 0.85),
-            ("nonce:   \(composing.progress > 0.95 ? "found ✓" : "…")", 0.95),
-        ]
-        var rowY = boxRect.minY + 28
-        for (text, threshold) in lines {
-            if composing.progress < threshold { continue }
-            let alpha = min(1.0, (composing.progress - threshold) / 0.10)
-            context.draw(
-                Text(text)
-                    .font(.system(size: settings.scaled(9), weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85 * alpha)),
-                at: CGPoint(x: boxRect.minX + 8, y: rowY),
-                anchor: .leading
-            )
-            rowY += 13
         }
     }
 
@@ -1265,135 +1321,6 @@ struct Ch02_Graph: View {
                 .foregroundColor(.white.opacity(0.75 * fade)),
             at: CGPoint(x: size.width / 2, y: panelY + panelHeight + 10)
         )
-    }
-
-    /// Staged-scene perspective panel (scenes 0/1/2). Derives each cast
-    /// member's "knows" set from the actual visible vertices + parent edges
-    /// so the panel never claims someone has seen a vertex that isn't on
-    /// screen. Each cast member knows:
-    ///   - their own staged vertex (if visible), and
-    ///   - every visible vertex their staged vertex points to as a parent.
-    ///
-    /// Scene 0 (Aaron alone): Aaron knows {α}; Ben/Carl know nothing.
-    /// Scene 1 (+Ben): Aaron knows {α}; Ben knows {α, β}; Carl nothing.
-    /// Scene 2 (+Carl): Aaron knows {α}; Ben knows {α, β}; Carl knows {α, γ};
-    ///                  COMMON = {α} (β and γ are still in flight).
-    private func drawStagedPerspectivePanel(
-        in context: inout GraphicsContext, size: CGSize, time: Double,
-        visibleVerts: [VertexData], visibleEdges: [EdgeData]
-    ) {
-        guard let aaronPid = pid(of: Cast.aaron),
-              let benPid   = pid(of: Cast.ben),
-              let carlPid  = pid(of: Cast.carl) else { return }
-
-        // Each cast member's chosen staged vertex (their earliest visible).
-        let aaronVerts = visibleVerts.filter { $0.processIdHex == aaronPid }
-        let benVerts   = visibleVerts.filter { $0.processIdHex == benPid }
-        let carlVerts  = visibleVerts.filter { $0.processIdHex == carlPid }
-        let aaronVx = aaronVerts.min(by: { $0.round < $1.round })
-        let benVx   = benVerts.min(by:   { $0.round < $1.round })
-        let carlVx  = carlVerts.min(by:  { $0.round < $1.round })
-
-        // Build "knows" sets edge-locally: each cast member knows their own
-        // vertex plus every visible parent it references.
-        func knowsOf(_ vx: VertexData?) -> Set<String> {
-            guard let vx else { return [] }
-            var set: Set<String> = [vx.digestHex]
-            for e in visibleEdges where e.from == vx.digestHex {
-                set.insert(e.to)
-            }
-            return set
-        }
-        let aaronKnows = knowsOf(aaronVx)
-        let benKnows   = knowsOf(benVx)
-        let carlKnows  = knowsOf(carlVx)
-
-        // Items always show all three cast slots so the panel layout stays
-        // stable across scenes 0/1/2 (only the dot brightness changes).
-        let items: [PanelItem] = [
-            PanelItem(label: "AARON", id: aaronVx?.digestHex ?? "—", color: Cast.coral),
-            PanelItem(label: "BEN",   id: benVx?.digestHex   ?? "—", color: Cast.teal),
-            PanelItem(label: "CARL",  id: carlVx?.digestHex  ?? "—", color: Cast.amber),
-        ]
-        drawPerspectivePanel(
-            in: &context, size: size, time: time,
-            items: items,
-            aaronKnows: aaronKnows, benKnows: benKnows, carlKnows: carlKnows
-        )
-    }
-
-    /// Big, unmistakable rendering of the 1-3 staged vertices: cast name
-    /// label above each, hash digest beside, real arrows for parent edges,
-    /// and a faint dim of the rest of the lane backdrop. Replaces the old
-    /// "drawVertices then ring overlay" path which hid the actual cast story
-    /// behind generic-looking circles.
-    private func renderStagedBeat(
-        in context: inout GraphicsContext, size: CGSize, time: Double,
-        layout: DAGLayout, visibleVerts: [VertexData],
-        visibleEdges: [EdgeData], snap: NodeSnapshot
-    ) {
-        // Parent edges as REAL arrows in the child's cast color. Each edge in
-        // `visibleEdges` is `from = child, to = parent`.
-        for edge in visibleEdges {
-            // Look up the child vertex to get its cast color.
-            guard let childV = visibleVerts.first(where: { $0.digestHex == edge.from }) else { continue }
-            let color = dm.castColor(for: childV.processIdHex)
-            layout.drawArrowEdge(
-                in: &context,
-                from: edge.from, to: edge.to,
-                color: color, alpha: 0.95,
-                lineWidth: 2.6, headLength: 14, headWidth: 10,
-                startInset: 22, endInset: 24
-            )
-        }
-
-        // Vertices, large and labeled.
-        for v in visibleVerts {
-            guard let pos = layout.positions[v.digestHex] else { continue }
-            let role = dm.castRole(for: v.processIdHex)
-            let color = dm.castColor(for: v.processIdHex)
-            let pulse = 0.85 + 0.15 * sin(time * 2.0)
-
-            let r: CGFloat = 22 * CGFloat(pulse)
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-
-            // Soft halo.
-            let haloR = r * 1.7
-            let haloRect = CGRect(x: pos.x - haloR, y: pos.y - haloR,
-                                   width: haloR * 2, height: haloR * 2)
-            context.fill(Circle().path(in: haloRect),
-                        with: .color(color.opacity(0.18)))
-
-            context.fill(Circle().path(in: rect),
-                        with: .color(color.opacity(0.95)))
-            context.stroke(Circle().path(in: rect),
-                          with: .color(.white.opacity(0.5)), lineWidth: 1.5)
-
-            // Hash inside the circle (4 chars).
-            context.draw(
-                Text(String(v.digestHex.prefix(4)))
-                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.95)),
-                at: pos
-            )
-
-            // Cast name above.
-            if role.isNamedCast {
-                context.draw(
-                    Text(role.displayName.uppercased())
-                        .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
-                        .foregroundColor(color.opacity(0.95)),
-                    at: CGPoint(x: pos.x, y: pos.y - r - 18)
-                )
-            }
-            // Round + digest below.
-            context.draw(
-                Text("R\(v.round) · \(String(v.digestHex.prefix(8)))…")
-                    .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.65)),
-                at: CGPoint(x: pos.x, y: pos.y + r + 16)
-            )
-        }
     }
 
     /// For scenes 0/1/2, return a hand-curated narrative beat. The narration
