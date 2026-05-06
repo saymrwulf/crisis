@@ -336,86 +336,113 @@ struct Ch02_Graph: View {
         }
     }
 
-    // MARK: - Composing slot
+    // MARK: - Top-center "current detail" slot
+    //
+    // Composing and open-envelope content both render in a SINGLE fixed
+    // slot at the top center of the canvas — never adjacent to a cast
+    // circle. Reasons:
+    //   - Lane content (cast circles, accepted vertices, parent edges)
+    //     stays uncluttered. Adjacent-lane pollution disappears.
+    //   - Composing and reading are mutually exclusive events on the
+    //     timeline (one author writes; one recipient reads). Sharing
+    //     one slot is honest about that.
+    //   - A short colored connector ties the slot to whichever cast
+    //     member is "in focus" right now, so the viewer knows who.
+
+    private static let detailSlotY: CGFloat = 16
+    private static let detailSlotHeight: CGFloat = 130
 
     private func drawComposingSlot(
         in context: inout GraphicsContext, size: CGSize,
         composing: Ch01WorldState.ComposingState
     ) {
         guard let msg = Ch01Timeline.messages[composing.messageId] else { return }
-        let boxW: CGFloat = 320
-        let boxH: CGFloat = 110
         let authorPos = castPosition(cast: composing.author, size: size)
-        // Position the slot to the side of the author's lane, on the
-        // half of the canvas that has more room. Always vertically
-        // centered on the author's lane Y so the box and cast circle
-        // read as part of the same gesture.
-        let placeRight = authorPos.x < size.width / 2
-        let boxX: CGFloat = placeRight
-            ? authorPos.x + 56
-            : authorPos.x - 56 - boxW
-        let boxY: CGFloat = authorPos.y - boxH / 2
-        let boxRect = CGRect(x: boxX, y: boxY, width: boxW, height: boxH)
-
         let color = castColor(composing.author)
-        context.fill(RoundedRectangle(cornerRadius: 10).path(in: boxRect),
-                    with: .color(.black.opacity(0.85)))
-        context.stroke(RoundedRectangle(cornerRadius: 10).path(in: boxRect),
-                      with: .color(color.opacity(0.95)), lineWidth: 1.5)
+        let boxRect = detailSlotRect(size: size)
+        drawDetailSlotChrome(in: &context, rect: boxRect, accent: color,
+                              connectTo: authorPos)
 
         context.draw(
-            Text("✎ \(composing.author.role.displayName.uppercased()) WRITING")
-                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+            Text("✎ \(composing.author.role.displayName.uppercased()) WRITING \(composing.messageId)")
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
                 .foregroundColor(color),
-            at: CGPoint(x: boxRect.minX + 12, y: boxRect.minY + 12),
+            at: CGPoint(x: boxRect.minX + 14, y: boxRect.minY + 14),
             anchor: .leading
         )
 
-        var rowY = boxRect.minY + 30
-        // payload line
+        var rowY = boxRect.minY + 36
         if composing.payloadFilled {
             context.draw(
                 Text("payload: \(msg.payload)")
-                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85)),
-                at: CGPoint(x: boxRect.minX + 12, y: rowY),
+                    .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.88)),
+                at: CGPoint(x: boxRect.minX + 14, y: rowY),
                 anchor: .leading
             )
-            rowY += 16
+            rowY += 18
         }
-        // parents line
         if composing.parentsFilled {
             let parentsText = msg.parents.isEmpty ? "(genesis)" : msg.parents.joined(separator: ", ")
             context.draw(
                 Text("parents: \(parentsText)")
-                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85)),
-                at: CGPoint(x: boxRect.minX + 12, y: rowY),
+                    .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.88)),
+                at: CGPoint(x: boxRect.minX + 14, y: rowY),
                 anchor: .leading
             )
-            rowY += 16
+            rowY += 18
         }
-        // PoW progress / hash line
         if composing.sealed {
             context.draw(
                 Text("hash:    \(msg.hashShort)…  ✓")
-                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
                     .foregroundColor(color.opacity(0.95)),
-                at: CGPoint(x: boxRect.minX + 12, y: rowY),
+                at: CGPoint(x: boxRect.minX + 14, y: rowY),
                 anchor: .leading
             )
         } else if composing.powProgress > 0 {
-            let bars = Int(composing.powProgress * 20)
+            let bars = Int(composing.powProgress * 24)
             let bar = String(repeating: "█", count: bars)
-                + String(repeating: "·", count: 20 - bars)
+                + String(repeating: "·", count: 24 - bars)
             context.draw(
                 Text("PoW:     [\(bar)]")
-                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.75)),
-                at: CGPoint(x: boxRect.minX + 12, y: rowY),
+                    .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.78)),
+                at: CGPoint(x: boxRect.minX + 14, y: rowY),
                 anchor: .leading
             )
         }
+    }
+
+    /// Slot rectangle — fixed at top-center, fixed size. Sized to fit ~520pt
+    /// wide, which holds the longest beat content cleanly.
+    private func detailSlotRect(size: CGSize) -> CGRect {
+        let boxW: CGFloat = min(540, size.width - 80)
+        return CGRect(
+            x: size.width / 2 - boxW / 2,
+            y: Self.detailSlotY,
+            width: boxW,
+            height: Self.detailSlotHeight
+        )
+    }
+
+    /// Common slot frame: rounded box + dashed connector down to the
+    /// in-focus cast member.
+    private func drawDetailSlotChrome(
+        in context: inout GraphicsContext, rect: CGRect, accent: Color,
+        connectTo target: CGPoint
+    ) {
+        var connector = Path()
+        connector.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        connector.addLine(to: CGPoint(x: target.x, y: target.y - 36))
+        context.stroke(connector,
+                      with: .color(accent.opacity(0.45)),
+                      style: StrokeStyle(lineWidth: 1.4, dash: [3, 4]))
+        context.fill(RoundedRectangle(cornerRadius: 10).path(in: rect),
+                    with: .color(.black.opacity(0.88)))
+        context.stroke(RoundedRectangle(cornerRadius: 10).path(in: rect),
+                      with: .color(accent.opacity(0.95)), lineWidth: 1.5)
     }
 
     // MARK: - Decide arrow
@@ -450,26 +477,35 @@ struct Ch02_Graph: View {
         in context: inout GraphicsContext, size: CGSize,
         flight: Ch01WorldState.InFlightState
     ) {
-        let from = castPosition(cast: flight.from, size: size)
-        let to = castPosition(cast: flight.to, size: size)
-        // Path
+        // The flight is drawn ABOVE the lane axis (a "courier track")
+        // so the in-flight envelope is visually distinct from the
+        // sender's accepted-on-lane vertex. The track arcs over the
+        // direct line between sender and recipient.
+        let lift: CGFloat = 36
+        let fromAnchor = castPosition(cast: flight.from, size: size)
+        let toAnchor = castPosition(cast: flight.to, size: size)
+        let fromTrack = CGPoint(x: fromAnchor.x, y: fromAnchor.y - lift)
+        let toTrack = CGPoint(x: toAnchor.x, y: toAnchor.y - lift)
+
+        // Faint dashed path showing the courier track
         var path = Path()
-        path.move(to: from)
-        path.addLine(to: to)
+        path.move(to: fromTrack)
+        path.addLine(to: toTrack)
         context.stroke(path,
-                      with: .color(castColor(flight.from).opacity(0.30)),
+                      with: .color(castColor(flight.from).opacity(0.22)),
                       style: StrokeStyle(lineWidth: 1.0, dash: [3, 5]))
-        // Envelope at progress
+
+        // Envelope at progress along the track
         let p = CGFloat(flight.progress)
-        let pos = CGPoint(x: from.x + (to.x - from.x) * p,
-                          y: from.y + (to.y - from.y) * p)
+        let pos = CGPoint(x: fromTrack.x + (toTrack.x - fromTrack.x) * p,
+                          y: fromTrack.y + (toTrack.y - fromTrack.y) * p)
         guard let msg = Ch01Timeline.messages[flight.messageId] else { return }
-        let envW: CGFloat = 76
-        let envH: CGFloat = 32
+        let envW: CGFloat = 78
+        let envH: CGFloat = 30
         let rect = CGRect(x: pos.x - envW / 2, y: pos.y - envH / 2,
                           width: envW, height: envH)
         context.fill(RoundedRectangle(cornerRadius: 5).path(in: rect),
-                    with: .color(castColor(flight.from).opacity(0.92)))
+                    with: .color(castColor(flight.from).opacity(0.95)))
         context.stroke(RoundedRectangle(cornerRadius: 5).path(in: rect),
                       with: .color(.white.opacity(0.7)), lineWidth: 1.0)
         context.draw(
@@ -478,6 +514,16 @@ struct Ch02_Graph: View {
                 .foregroundColor(.white),
             at: pos
         )
+
+        // Small drop-line from the envelope down to the courier track
+        // anchor, so the eye can read the envelope as ABOVE the lane
+        // rather than floating freely.
+        var drop = Path()
+        drop.move(to: CGPoint(x: pos.x, y: pos.y + envH / 2))
+        drop.addLine(to: CGPoint(x: pos.x, y: pos.y + envH / 2 + 8))
+        context.stroke(drop,
+                      with: .color(castColor(flight.from).opacity(0.45)),
+                      lineWidth: 1.0)
     }
 
     // MARK: - Open envelope card
@@ -488,87 +534,81 @@ struct Ch02_Graph: View {
     ) {
         guard let msg = Ch01Timeline.messages[env.messageId] else { return }
         let recipientPos = castPosition(cast: env.recipient, size: size)
-        let cardW: CGFloat = 320
-        let cardH: CGFloat = 140
-        // Place to the side of the recipient that has space; if recipient
-        // is on the right, put card to the left, and vice versa.
-        let placeRight = recipientPos.x < size.width / 2
-        let cardX: CGFloat = placeRight
-            ? recipientPos.x + 56
-            : recipientPos.x - 56 - cardW
-        let cardY: CGFloat = recipientPos.y - cardH / 2
-        let cardRect = CGRect(x: cardX, y: cardY, width: cardW, height: cardH)
+        // Same slot the composing box uses — open-envelope and composing
+        // never co-occur on the timeline.
+        let rect = detailSlotRect(size: size)
         let color = castColor(msg.author)
+        drawDetailSlotChrome(in: &context, rect: rect, accent: color,
+                              connectTo: recipientPos)
 
-        context.fill(RoundedRectangle(cornerRadius: 10).path(in: cardRect),
-                    with: .color(.black.opacity(0.88)))
-        context.stroke(RoundedRectangle(cornerRadius: 10).path(in: cardRect),
-                      with: .color(color.opacity(0.95)), lineWidth: 1.5)
         context.draw(
-            Text("\(env.recipient.role.displayName.uppercased()) READS \(env.messageId)")
-                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+            Text("\(env.recipient.role.displayName.uppercased()) READS \(env.messageId)  (from \(msg.author.role.displayName.uppercased()))")
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
                 .foregroundColor(color),
-            at: CGPoint(x: cardRect.minX + 12, y: cardRect.minY + 14),
+            at: CGPoint(x: rect.minX + 14, y: rect.minY + 14),
             anchor: .leading
         )
-        var rowY = cardRect.minY + 32
+        var rowY = rect.minY + 36
         if env.bodyRevealed {
             context.draw(
                 Text("body:    \(msg.payload)")
-                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85)),
-                at: CGPoint(x: cardRect.minX + 12, y: rowY),
+                    .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.88)),
+                at: CGPoint(x: rect.minX + 14, y: rowY),
                 anchor: .leading
             )
-            rowY += 16
+            rowY += 18
         }
         if env.parentsRevealed {
             let parentsText = msg.parents.isEmpty ? "(genesis)" : msg.parents.joined(separator: ", ")
             context.draw(
                 Text("parents: \(parentsText)")
-                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.85)),
-                at: CGPoint(x: cardRect.minX + 12, y: rowY),
+                    .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.88)),
+                at: CGPoint(x: rect.minX + 14, y: rowY),
                 anchor: .leading
             )
-            rowY += 16
+            rowY += 18
         }
         if !env.resolvedParents.isEmpty {
             let resolved = env.resolvedParents.sorted().joined(separator: ", ")
             context.draw(
-                Text("resolved: \(resolved) ✓ (found in local view)")
-                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
-                    .foregroundColor(.green.opacity(0.85)),
-                at: CGPoint(x: cardRect.minX + 12, y: rowY),
+                Text("resolved: \(resolved) ✓ (found in \(env.recipient.role.displayName.uppercased())'s local view)")
+                    .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.88)),
+                at: CGPoint(x: rect.minX + 14, y: rowY),
                 anchor: .leading
             )
-            rowY += 16
+            rowY += 18
         }
         if env.verified {
             context.draw(
                 Text("hash:    \(msg.hashShort)… ✓ (verified)")
-                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
                     .foregroundColor(.green.opacity(0.95)),
-                at: CGPoint(x: cardRect.minX + 12, y: rowY),
+                at: CGPoint(x: rect.minX + 14, y: rowY),
                 anchor: .leading
             )
         }
     }
 
-    // MARK: - Footer
+    // MARK: - Beat tag (dev/testbed only)
 
+    /// Small beat-id tag in the very top-right corner. The live app
+    /// already exposes timeline position via the chapter scrubber, so
+    /// this exists mainly so PNG sweeps can be matched to a specific
+    /// beat when debugging. Kept tiny and faint.
     private func drawFooter(
         in context: inout GraphicsContext, size: CGSize,
         t: Double, world: Ch01WorldState
     ) {
-        let total = Ch01Timeline.totalDuration
+        guard let beatId = world.activeBeat?.id else { return }
         context.draw(
-            Text(String(format: "t=%.1fs / %.0fs   ·   beat: %@",
-                         t, total, world.activeBeat?.id ?? "—"))
-                .font(.system(size: settings.scaled(9), weight: .regular, design: .monospaced))
-                .foregroundColor(.white.opacity(0.30)),
-            at: CGPoint(x: 24, y: size.height - 14),
-            anchor: .leading
+            Text(beatId)
+                .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.20)),
+            at: CGPoint(x: size.width - 14, y: 10),
+            anchor: .trailing
         )
     }
 }
