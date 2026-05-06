@@ -8,6 +8,16 @@ struct Ch08_DA_Problem: View {
     let dm: DataManager
     @Environment(AppSettings.self) private var settings
 
+    /// Synthetic 8-node ring topology: cast colors first, then a few muted
+    /// peer tones so the chapter visually carries over from the cast scenes.
+    /// Avoids the legacy `DataManager.palette[i]` rainbow that broke cast
+    /// continuity here.
+    private static let castPalette: [Color] = [
+        Cast.coral, Cast.teal, Cast.amber, Cast.violet,
+        Cast.muted, Cast.muted.opacity(0.85),
+        Cast.muted.opacity(0.7), Cast.muted.opacity(0.55)
+    ]
+
     var body: some View {
         Canvas { context, size in
             render(context: &context, size: size, time: localTime)
@@ -41,7 +51,7 @@ struct Ch08_DA_Problem: View {
 
             let r: CGFloat = 18
             let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            let color = DataManager.palette[min(i, DataManager.palette.count - 1)]
+            let color = Self.castPalette[i % Self.castPalette.count]
             context.fill(Circle().path(in: rect), with: .color(color.opacity(0.7)))
         }
 
@@ -55,7 +65,7 @@ struct Ch08_DA_Problem: View {
                 if alpha > 0.01 {
                     let pulseRect = CGRect(x: pos.x - pulseR, y: pos.y - pulseR,
                                             width: pulseR * 2, height: pulseR * 2)
-                    let color = DataManager.palette[min(i, DataManager.palette.count - 1)]
+                    let color = Self.castPalette[i % Self.castPalette.count]
                     context.stroke(Circle().path(in: pulseRect),
                                   with: .color(color.opacity(alpha)), lineWidth: 1)
                 }
@@ -76,7 +86,7 @@ struct Ch08_DA_Problem: View {
             let particleR: CGFloat = 2.5
             let particleRect = CGRect(x: px - particleR, y: py - particleR,
                                        width: particleR * 2, height: particleR * 2)
-            let color = DataManager.palette[min(fromIdx, DataManager.palette.count - 1)]
+            let color = Self.castPalette[fromIdx % Self.castPalette.count]
             context.fill(Circle().path(in: particleRect), with: .color(color.opacity(0.4 * (1 - progress))))
         }
 
@@ -148,7 +158,7 @@ struct Ch08_DA_Problem: View {
 
         for i in 0..<nodeCount {
             let pos = netPositions[i]
-            let color = DataManager.palette[min(i, DataManager.palette.count - 1)]
+            let color = Self.castPalette[i % Self.castPalette.count]
             let stressColor = Color(red: 0.3 + 0.5 * stress, green: 0.7 * (1 - stress * 0.5), blue: 0.9 * (1 - stress))
             let blendedColor = stress > 0.5 ? stressColor : color
             let r: CGFloat = 18
@@ -321,7 +331,7 @@ struct Ch08_DA_Problem: View {
                                y: honestCenter.y + 70 * sin(angle))
             let r: CGFloat = 14
             let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            let color = DataManager.palette[min(i, DataManager.palette.count - 1)]
+            let color = Self.castPalette[i % Self.castPalette.count]
             context.fill(Circle().path(in: rect), with: .color(color.opacity(0.7)))
         }
 

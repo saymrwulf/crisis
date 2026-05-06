@@ -696,8 +696,7 @@ struct VertexInspector: View {
     }
 
     private func nodeColor(for processIdHex: String) -> Color {
-        let idx = dm.sim?.nodes.firstIndex(where: { $0.processIdHex == processIdHex }) ?? 0
-        return DataManager.palette[min(idx, DataManager.palette.count - 1)]
+        dm.castColor(for: processIdHex)
     }
 
     private func clamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double {

@@ -147,4 +147,19 @@ final class DataManager {
     func honestData(step: Int) -> NodeSnapshot? {
         snapshot(step: step)?.firstHonestSnapshot
     }
+
+    /// Local snapshot of one specific cast member at a given step. Each node
+    /// in the simulation maintains its OWN view of the DAG (only what it has
+    /// received via gossip), so this is what makes "Ben's perspective" vs
+    /// "Aaron's perspective" actually different — the user's local-consensus
+    /// pedagogy depends on this.
+    func snapshot(forCastRole role: CastRole, step: Int) -> NodeSnapshot? {
+        guard let snap = snapshot(step: step) else { return nil }
+        // Find the sim-node name whose PID maps to this cast role.
+        guard let pid = castByPid.first(where: { $0.value.id == role.id })?.key,
+              let node = sim?.nodes.first(where: { $0.processIdHex == pid }) else {
+            return nil
+        }
+        return snap.nodeSnapshots[node.name]
+    }
 }

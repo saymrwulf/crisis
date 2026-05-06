@@ -88,7 +88,16 @@ enum SceneCapture {
                 let address = SceneAddress(chapter: ci, scene: si)
                 engine.goTo(global: address.globalIndex)
 
-                for t in timeOffsets {
+                // Per-scene time offsets: extended scenes (e.g. the Ch1.3
+                // gossip dramatization) need more samples across their
+                // longer duration to capture each pedagogical beat.
+                let offsetsForThisScene: [Double]
+                if address == SceneAddress(chapter: 1, scene: 3) {
+                    offsetsForThisScene = [0.5, 4.0, 8.0, 12.0, 16.0, 20.0, 23.0]
+                } else {
+                    offsetsForThisScene = timeOffsets
+                }
+                for t in offsetsForThisScene {
                     let settings = AppSettings()
                     let view = SceneRouter(address: address, localTime: t, engine: engine, dm: dm)
                         .environment(settings)
@@ -132,8 +141,32 @@ enum SceneCapture {
         // to its neighbor (catch the "convergence didn't fire" regression).
         let sanityReport = runSanityChecks()
 
+        // ─── Dynamic harness ─────────────────────────────────────────────
+        // Three additional layers PNG sweeps cannot provide:
+        //   1. Narrative invariants: code-level claims about cast assignment,
+        //      lifeline geometry, per-chapter staging. Catches "Carl appears
+        //      before Ben" and similar logical fallacies.
+        //   2. Source audit: forbidden patterns (palette[i], hardcoded honest
+        //      PIDs, Y-jitter). Catches silent regressions that don't crash.
+        //   3. Per-scene MP4 video clips: the only way to verify animation
+        //      continuity without running the live app.
+        let invariantReport = NarrativeInvariants.runAll(dm: dm)
+        NarrativeInvariants.writeReport(invariantReport,
+            to: outputDir.appendingPathComponent("INVARIANTS.md"))
+
+        let auditReport = SourceAudit.runAudit()
+        SourceAudit.writeReport(auditReport,
+            to: outputDir.appendingPathComponent("SOURCE_AUDIT.md"))
+
+        let videoClips = await SceneVideoCapture.captureAll(dm: dm, outputDir: outputDir)
+        SceneVideoCapture.writeReport(videoClips,
+            to: outputDir.appendingPathComponent("VIDEO_CLIPS.md"))
+
         print("✓ Captured \(captured) scene + \(inspectorCaptured) inspector + \(comparisonCaptured) comparison + \(totalNew) extended frames")
         print("  Sanity: \(sanityReport)")
+        print("  Invariants: \(invariantReport.summary) (\(invariantReport.failed) failed)")
+        print("  Source audit: \(auditReport.errorCount) errors, \(auditReport.warnCount) warnings across \(auditReport.scanned) files")
+        print("  Video clips: \(videoClips.filter(\.succeeded).count)/\(videoClips.count) MP4 written")
         print("  Output: \(outputDir.path)")
     }
 

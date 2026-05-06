@@ -27,8 +27,11 @@ struct Ch05_Voting: View {
     @Environment(AppSettings.self) private var settings
 
     /// Mid-late simulation: Aaron and Carl have produced enough vertices
-    /// that their depth-2 ancestor cones overlap meaningfully.
-    private let dataStep = 24
+    /// that their depth-2 ancestor cones overlap meaningfully. With the
+    /// 80-step simulation, step 30 sits comfortably before convergence
+    /// (step 40), so the convergence collapse here is genuinely a *teaching*
+    /// preview of what the protocol does, not a replay of a fait accompli.
+    private let dataStep = 30
 
     // Scene → number of steps (must sum to 10).
     private static let stepsPerScene = [3, 3, 4]

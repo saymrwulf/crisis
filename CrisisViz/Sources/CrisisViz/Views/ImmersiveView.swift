@@ -33,7 +33,15 @@ struct ImmersiveView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .id(engine.address.chapter)  // recreate only on chapter change
-                    .transition(.opacity)
+                    // Inter-chapter morph: slower asymmetric cross-fade. Old
+                    // chapter exits at 0.55s; new chapter enters at 0.85s. Up
+                    // to ~1s of "no new info" is accepted by the redesign in
+                    // exchange for visual continuity (no hard cuts between
+                    // wildly different topologies).
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeInOut(duration: 0.85)),
+                        removal:   .opacity.animation(.easeInOut(duration: 0.55))
+                    ))
                     LegendSidebar()
                 }
                 .background(.black)
@@ -47,6 +55,11 @@ struct ImmersiveView: View {
                         title: sceneTitle,
                         narration: sceneNarration,
                         chapterTitle: engine.currentChapter.title,
+                        chapterIndex: engine.address.chapter,
+                        sceneIndex: engine.address.scene,
+                        sceneCount: engine.currentChapter.sceneCount,
+                        globalSceneIndex: engine.address.globalIndex,
+                        totalScenes: AllChapters.totalScenes,
                         isExpanded: $narrationExpanded
                     )
                     Spacer()
@@ -112,7 +125,11 @@ struct ImmersiveView: View {
     }
 
     private func navigateWithTransition(_ action: () -> Void) {
-        withAnimation(.easeInOut(duration: 0.35)) {
+        // 0.6s wraps the chapter-id change so the asymmetric transition above
+        // has enough time to cross-fade. Scene changes within a chapter don't
+        // trigger view recreation (`.id` unchanged), so this duration only
+        // affects chapter boundaries.
+        withAnimation(.easeInOut(duration: 0.6)) {
             action()
         }
     }

@@ -16,7 +16,19 @@ final class SceneEngine {
 
     /// Monotonic counter; incremented on every stopAutoAdvance() to invalidate in-flight asyncAfter blocks.
     private var advanceGeneration: Int = 0
-    let sceneDuration: Double = 8.0  // seconds at 1x
+    let sceneDuration: Double = 8.0  // default at 1x
+
+    /// Per-(chapter,scene) duration overrides. Some scenes — notably the
+    /// Ch01 scene-3 slow-motion gossip dramatization — can't compress into
+    /// 8 seconds without losing the pedagogy. List them explicitly here.
+    private static let durationOverrides: [SceneAddress: Double] = [
+        SceneAddress(chapter: 1, scene: 3): 24.0   // gossip dramatization
+    ]
+
+    /// Effective duration for the current scene, honoring overrides.
+    func sceneDurationFor(_ address: SceneAddress) -> Double {
+        Self.durationOverrides[address] ?? sceneDuration
+    }
 
     var address: SceneAddress {
         SceneAddress.from(globalIndex: currentGlobal)
@@ -34,9 +46,11 @@ final class SceneEngine {
         return max(0, delta * speed)
     }
 
-    /// Progress within current scene (0..1), capped at 1.
+    /// Progress within current scene (0..1), capped at 1. Honors per-scene
+    /// duration overrides so a long scene's progress bar doesn't max out
+    /// after only 8 seconds.
     func progress(at date: Date) -> Double {
-        min(1.0, localTime(at: date) / sceneDuration)
+        min(1.0, localTime(at: date) / sceneDurationFor(address))
     }
 
     init() {
@@ -101,7 +115,9 @@ final class SceneEngine {
     private func startAutoAdvance() {
         advanceGeneration += 1
         let myGen = advanceGeneration
-        let interval = sceneDuration / max(0.1, speed)
+        // Auto-advance honors the current scene's effective duration (longer
+        // scenes get more time). Speed scaling still applies.
+        let interval = sceneDurationFor(address) / max(0.1, speed)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(interval))
             guard let self, self.advanceGeneration == myGen, self.isPlaying else { return }

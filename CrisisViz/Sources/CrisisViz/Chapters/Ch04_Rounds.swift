@@ -17,23 +17,23 @@ struct Ch04_Rounds: View {
     }
 
     private func render(context: inout GraphicsContext, size: CGSize, time: Double) {
-        guard let sim = dm.sim,
+        guard dm.sim != nil,
               let snap = dm.honestData(step: dataStep) else { return }
 
         let vertices = snap.vertices
         let edges = snap.edges
 
         // Draw the DAG with round separators prominent
-        let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: sim.nodes,
+        let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: dm.castOrderedNodes(),
                                         canvasSize: size, margin: 60)
         let minRound = vertices.map { $0.round }.min() ?? 0
-        layout.drawNodeLanes(in: &context, nodes: sim.nodes, canvasSize: size, dm: dm, textScale: settings.textScale)
+        layout.drawNodeLanes(in: &context, nodes: dm.castOrderedNodes(), canvasSize: size, dm: dm, textScale: settings.textScale)
         layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound, alpha: 0.4, textScale: settings.textScale)
         layout.drawEdges(in: &context, edges: edges, alpha: 0.3)
 
         // Highlight isLast vertices (round boundary markers) with bright rings
         let roundMarkers = Set(vertices.filter { $0.isLast }.map { $0.digestHex })
-        layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
+        layout.drawVertices(in: &context, vertices: vertices, nodes: dm.castOrderedNodes(), dm: dm,
                            showLabels: true, showWeight: true, highlightSet: roundMarkers, textScale: settings.textScale)
 
         // Weight bars per round at the bottom

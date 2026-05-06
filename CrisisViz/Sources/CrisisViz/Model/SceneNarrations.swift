@@ -22,10 +22,10 @@ enum SceneNarrations {
         // Ch 0: Four friends, one ledger, no boss.
         ["Meet the cast.", "Each writes their own log.", "But there's only one truth."],
         // Ch 1: Aaron speaks. Ben listens. The graph begins.
-        ["Aaron's first message.",
-         "Ben copies what he saw.",
-         "Carl arrives and links in.",
-         "Click any vertex to look inside.",
+        ["Aaron broadcasts.",
+         "Ben answers Aaron.",
+         "Carl also points back to Aaron.",
+         "Watch a message travel — slow motion gossip.",
          "A hash hides what's underneath.",
          "Same messages, same graph, every time.",
          "Following hashes back to the start."],
@@ -76,13 +76,13 @@ enum SceneNarrations {
         ],
         // Ch 1: Aaron speaks. Ben listens. The graph begins.
         [
-            "Aaron grinds proof-of-work and produces the first message. There is no global clock telling him when to do this — he just finishes his PoW puzzle and broadcasts. The story starts whenever he is ready.",
-            "Ben hears Aaron's message and references it from his own next message. That little arrow between them — Ben's vertex pointing back to Aaron's — is what we'll call a parent edge. It says \"I saw this before I spoke\".",
-            "Carl now joins in. His message points back to whatever tips of the DAG he can see — currently Aaron's and Ben's. The graph is starting to braid the four perspectives together.",
-            "You can click any vertex to look inside it. The window shows what that validator saw at that moment — its own message, plus the chain of parents it acknowledged.",
+            "Aaron grinds proof-of-work and broadcasts the first message we follow on this canvas. There is no global clock — he just finishes his puzzle and sends. The hash printed inside Aaron's circle is the message's own digest, computed by Aaron when he created it. From now on that hash is its name.",
+            "Ben has already received Aaron's message via gossip. When Ben produces his own next message, he embeds Aaron's hash inside it as a parent reference. The arrow you see — pointing FROM Ben's vertex TO Aaron's — is that parent edge. It says \"I saw Aaron's message before I spoke.\"",
+            "Carl's first message ALSO points back to Aaron's first message — same arrow shape as Ben's, just from a different lane. Carl does NOT reference Ben (Carl hadn't received Ben's message when he wrote his own). Two independent observers, both pointing at Aaron. Read the bottom panel literally: it shows what each player has actually received via gossip at this moment. Notice Ben hasn't received Carl's message yet — so the COMMON-KNOWLEDGE column drops Carl. That gap is what gossip fixes next.",
+            "Slow motion. Aaron writes message α (the body and a hash header fill in line by line). When sealed, α flies through the ether — twice, once toward Ben, once toward Carl, at different speeds. Ben gets α first, his bubble grows. Ben writes β with α's hash inside. While β is in flight, Carl — who has only just received α — writes γ referencing α (NOT β, because β hasn't arrived). Watch the asymmetry: same world, different bubbles, until gossip catches up.",
             "But hashes are one-way. If you only see Carl's hash, you cannot tell what's underneath it. You need the actual messages, opened up, to verify the chain. This is why \"data availability\" will become its own chapter later.",
-            "Despite the chaotic timing, the same set of messages always produces the same graph. Aaron's view, Ben's view, and Carl's view — once they've all gossiped — are byte-for-byte identical. This determinism is what makes consensus even possible.",
-            "From any vertex you can walk back through parent hashes all the way to the very first message. That walk is the validator's full causal history.",
+            "Each player keeps a LOCAL DAG — only the messages they've received. Different players have different views in real time. But the graph is determined by message contents alone: same set of messages received → same graph computed, byte-for-byte. Gossip is idempotent (re-receiving an old message changes nothing because the digest is already known), so eventually every honest player's view converges to the same DAG. This determinism is what makes consensus possible.",
+            "From any vertex you can walk back through ALL its parent hashes — not just one chain, but a tree fanning out into every ancestor. The yellow ring shows the full ancestor cone of one leaf. Where the cone bottoms out (★ GENESIS) are the very first messages anyone sent. That cone is the vertex's complete causal history.",
         ],
         // Ch 2: Dave can't hear Aaron. The graph splits.
         [
@@ -93,19 +93,19 @@ enum SceneNarrations {
         ],
         // Ch 3: Counting witnesses to mark a round.
         [
-            "Every message carries a proof-of-work weight — the harder the puzzle, the heavier the message. Round 0 starts collecting weight as Aaron, Ben and Carl publish.",
-            "When the total weight inside a round crosses a threshold, the round closes. The very last message to push it over the line is flagged with `is_last` — that's the round boundary marker.",
-            "Crucially, every honest validator looking at the same graph computes the same round boundary. Nobody negotiates. Weight is just arithmetic — and arithmetic does not depend on who you ask.",
+            "What is a round? It is NOT a clock interval. A vertex's round number is computed by counting parent edges back: if a vertex sees enough weight from its causal history, its round is one higher than its parents'. A round-4 message can still reference round-1 messages it just received — old parents are perfectly legitimate, gossip is allowed to deliver old messages late. Each message carries proof-of-work weight; harder puzzles → heavier messages.",
+            "When the total weight inside a round crosses a threshold, the round closes. The very last message to push it over the line is flagged with `is_last` — that's the round boundary marker. Rounds are *derived*, not declared — every honest validator who has the same graph computes the identical round boundary just by counting weight. Nobody negotiates.",
+            "Bookkeeping: every honest player keeps their own DAG of received messages, full stop. Re-gossip is harmless — duplicate digests are detected and dropped. Players don't track who they sent what to; the gossip layer fans out and the digest dedupes on the receiver. Weight is arithmetic, and arithmetic doesn't depend on who you ask.",
         ],
         // Ch 4: Did you see what I saw?
         [
             "Crisis sends NO ballots and NO vote messages. Voting is just \"can I trace a path through my graph from your vertex back to a shared ancestor?\". If yes, you've seen what I've seen.",
-            "Watch this slow walk. We highlight Aaron's round-4 vertex on top, and Carl's round-4 vertex below. We then draw the depth-3 ancestor cone of each. The pulsing white region is where the cones overlap — those are the vertices BOTH of them have witnessed.",
+            "Watch this slow walk. We pick a recent vertex from Aaron and one from Carl — both heavy enough that the protocol cares. We then draw the depth-2 ancestor cone of each: every vertex they can trace back through parent edges. The pulsing white region is where the two cones overlap — vertices BOTH of them have witnessed.",
             "Two or more shared ancestors is enough. Aaron and Carl now agree. This is the collapse: their two opinions snap together into one round-marked consensus, with no message ever named \"vote\" being sent.",
         ],
         // Ch 5: One vertex per round becomes the spokesperson.
         [
-            "In each round, Aaron's, Ben's, and Carl's vertices all compete on PoW weight. Heaviest wins. Dave's vertices, as a Byzantine actor, are never trusted — but their weight is still real, so they participate in the lottery.",
+            "In each round, every validator's heaviest vertex competes for the round leadership — Aaron, Ben, Carl, the background peers, and Dave too. The heaviest weighing in for the round wins. Dave's vertices, as a Byzantine actor, are never trusted — but their PoW weight is still real, so they participate in the lottery.",
             "The heaviest-weight vertex of the round becomes that round's leader — its spokesperson. Nobody can game this; PoW outcomes are unpredictable until the puzzle is solved.",
         ],
         // Ch 6: Spokespersons line up. Everyone else falls in behind.
@@ -131,7 +131,7 @@ enum SceneNarrations {
         ],
         // Ch 9: Dave lies. Crisis catches him.
         [
-            "Dave decides to send conflicting messages — one to Aaron, a different one to Ben. He's trying to make Aaron and Ben disagree about what they saw.",
+            "Dave is the byzantine actor. Look at his lane: every red-ringed vertex is a message that conflicts with another Dave vertex — same identity, different content or different parents. He's trying to make Aaron, Ben and Carl disagree about what they saw.",
             "It doesn't work. Aaron and Ben gossip with each other and quickly notice they have two contradictory Dave-vertices. The protocol marks Dave's vertices as banned (red X). Total order routes around them. Aaron and Ben still converge — and Dave's weight is wasted.",
         ],
     ]

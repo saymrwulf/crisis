@@ -8,9 +8,10 @@ struct Ch06_Leader: View {
     let dm: DataManager
     @Environment(AppSettings.self) private var settings
 
-    // Convergence happens at step 31 — pick a step shortly after so the
-    // elected leader is recorded and visible to this chapter.
-    private let dataStep = 31
+    // Convergence happens at step 40 in the regenerated 80-step simulation.
+    // We pick a step shortly after so the elected leader is recorded and
+    // the candidate set is rich enough to make weight comparisons meaningful.
+    private let dataStep = 45
 
     var body: some View {
         Canvas { context, size in
@@ -19,7 +20,7 @@ struct Ch06_Leader: View {
     }
 
     private func render(context: inout GraphicsContext, size: CGSize, time: Double) {
-        guard let sim = dm.sim,
+        guard dm.sim != nil,
               let snap = dm.honestData(step: dataStep) else { return }
 
         let vertices = snap.vertices
@@ -27,7 +28,7 @@ struct Ch06_Leader: View {
 
         // Show the DAG in the top half
         let dagSize = CGSize(width: size.width, height: size.height * 0.55)
-        let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: sim.nodes,
+        let layout = DAGLayout.compute(vertices: vertices, edges: edges, nodes: dm.castOrderedNodes(),
                                         canvasSize: dagSize, margin: 50)
         let minRound = vertices.map { $0.round }.min() ?? 0
         layout.drawRoundSeparators(in: &context, canvasSize: dagSize, minRound: minRound, alpha: 0.2, textScale: settings.textScale)
@@ -41,7 +42,7 @@ struct Ch06_Leader: View {
         let candidateSet = Set(candidates.map { $0.digestHex })
         let winner = candidates.first
 
-        layout.drawVertices(in: &context, vertices: vertices, nodes: sim.nodes, dm: dm,
+        layout.drawVertices(in: &context, vertices: vertices, nodes: dm.castOrderedNodes(), dm: dm,
                            showLabels: true, showWeight: true, highlightSet: candidateSet, textScale: settings.textScale)
 
         // Winner crown
@@ -69,8 +70,7 @@ struct Ch06_Leader: View {
             let barRect = CGRect(x: x, y: chartY + chartH - barH, width: barW, height: barH)
 
             let isWinner = candidate.digestHex == winner?.digestHex
-            let colorIdx = dm.colorIndex(for: candidate.processIdHex)
-            let color = DataManager.palette[min(colorIdx, DataManager.palette.count - 1)]
+            let color = dm.castColor(for: candidate.processIdHex)
 
             context.fill(RoundedRectangle(cornerRadius: 4).path(in: barRect),
                         with: .color(color.opacity(isWinner ? 0.9 : 0.5)))

@@ -7,7 +7,7 @@ struct ChapterDef: Identifiable {
     let sceneCount: Int
 }
 
-struct SceneAddress: Equatable {
+struct SceneAddress: Equatable, Hashable {
     let chapter: Int   // 0-based
     let scene: Int     // 0-based within chapter
 

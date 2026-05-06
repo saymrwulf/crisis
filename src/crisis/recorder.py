@@ -163,19 +163,32 @@ def capture_snapshot(step: int, nodes, weight_system,
         else:
             ordered = compute_order(g, node.leader_stream)
 
-        # Build vertex snapshots
+        # Build vertex snapshots.
+        #
+        # `is_byzantine_source` flags vertices whose ORIGIN node is byzantine.
+        # The simulator's `_byzantine_message` produces every byzantine vertex
+        # with a "byz-..." payload prefix (whether it's a mutation or a
+        # straight broadcast), so the payload prefix is a sound proxy. We
+        # also union with the node-level `is_byzantine` check on the
+        # observing node's own outputs so a snapshot from an honest node
+        # still flags vertices it received from a byzantine peer.
+        byz_pids = {n.process_id.hex()[:8] for n in nodes if n.is_byzantine}
         v_snaps = []
         for v in g.all_vertices():
+            pid_hex = v.id.hex()[:8]
+            payload = v.payload.decode(errors="replace")[:60]
+            is_byz_src = (pid_hex in byz_pids) or payload.startswith("byz-")
             vs = VertexSnapshot(
                 digest_hex=v.message_digest.hex()[:12],
                 digest_full=v.message_digest.hex(),
-                process_id_hex=v.id.hex()[:8],
+                process_id_hex=pid_hex,
                 round_number=v.round,
                 is_last=bool(v.is_last),
                 weight=weight_system.weight(v.m),
-                payload_str=v.payload.decode(errors="replace")[:60],
+                payload_str=payload,
                 total_position=v.total_position,
                 svp=list(v.svp) if v.svp else [],
+                is_byzantine_source=is_byz_src,
             )
             v_snaps.append(vs)
 

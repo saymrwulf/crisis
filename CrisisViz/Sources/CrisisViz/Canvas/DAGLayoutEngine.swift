@@ -80,14 +80,16 @@ struct DAGLayout {
             let zoneCenterX = leftMargin + (CGFloat(Double(round - minRound) + 0.5) / CGFloat(roundRange)) * usableWidth
             let hashJitterX = hashDerived(vertex.digestHex, salt: 1) * zoneWidth * 0.35
 
-            // Y: lane center + small jitter
+            // Y: lane center exactly — each lane is a player's "lifeline" axis,
+            // so every one of their vertices sits on that horizontal line. No
+            // Y-jitter, ever. (X-jitter within a round zone is fine because the
+            // round zone is a band, not an axis.)
             let laneHeight = usableHeight / CGFloat(nodeCount)
             let laneCenterY = margin + (CGFloat(laneIdx) + 0.5) * laneHeight
-            let hashJitterY = hashDerived(vertex.digestHex, salt: 2) * laneHeight * 0.3
 
             // Clamp to canvas bounds so nothing is cut off
             let x = max(margin + 10, min(canvasSize.width - margin - 10, zoneCenterX + hashJitterX))
-            let y = max(margin + 10, min(canvasSize.height - margin - 10, laneCenterY + hashJitterY))
+            let y = laneCenterY
             positions[vertex.digestHex] = CGPoint(x: x, y: y)
         }
 
@@ -126,6 +128,56 @@ extension DAGLayout {
             path.addLine(to: to)
             context.stroke(path, with: .color(.white.opacity(alpha)), lineWidth: lineWidth)
         }
+    }
+
+    /// Draw a single parent edge as an actual ARROW — stem + filled triangular
+    /// head — pointing from `child` (e.g., Ben's vertex) to `parent` (Aaron's
+    /// vertex). The narration calls these "parent edges" / "Ben → Aaron",
+    /// so the visualization needs an arrowhead, not a bare line.
+    func drawArrowEdge(
+        in context: inout GraphicsContext,
+        from childDigest: String,
+        to parentDigest: String,
+        color: Color = .white,
+        alpha: Double = 0.9,
+        lineWidth: CGFloat = 2.0,
+        headLength: CGFloat = 12,
+        headWidth: CGFloat = 8,
+        startInset: CGFloat = 12,
+        endInset: CGFloat = 14
+    ) {
+        guard let cPos = positions[childDigest], let pPos = positions[parentDigest] else { return }
+        let dx = pPos.x - cPos.x
+        let dy = pPos.y - cPos.y
+        let dist = sqrt(dx * dx + dy * dy)
+        guard dist > 1 else { return }
+        let ux = dx / dist
+        let uy = dy / dist
+        // Move endpoints outside the vertex circles so the arrow doesn't
+        // visually disappear inside the head/tail glyph.
+        let start = CGPoint(x: cPos.x + ux * startInset, y: cPos.y + uy * startInset)
+        let end   = CGPoint(x: pPos.x - ux * endInset,   y: pPos.y - uy * endInset)
+
+        // Stem.
+        var stem = Path()
+        stem.move(to: start)
+        stem.addLine(to: end)
+        context.stroke(stem, with: .color(color.opacity(alpha)), lineWidth: lineWidth)
+
+        // Filled triangular head at `end`, perpendicular base.
+        let perpX = -uy
+        let perpY = ux
+        let baseCenter = CGPoint(x: end.x - ux * headLength, y: end.y - uy * headLength)
+        let baseLeft = CGPoint(x: baseCenter.x + perpX * headWidth / 2,
+                                y: baseCenter.y + perpY * headWidth / 2)
+        let baseRight = CGPoint(x: baseCenter.x - perpX * headWidth / 2,
+                                 y: baseCenter.y - perpY * headWidth / 2)
+        var head = Path()
+        head.move(to: end)
+        head.addLine(to: baseLeft)
+        head.addLine(to: baseRight)
+        head.closeSubpath()
+        context.fill(head, with: .color(color.opacity(alpha)))
     }
 
     /// Draw all vertices as colored circles with optional labels
@@ -170,8 +222,7 @@ extension DAGLayout {
             }
             if appear < 0.01 { continue }
 
-            let colorIdx = dm.colorIndex(for: vertex.processIdHex)
-            let baseColor = DataManager.palette[min(colorIdx, DataManager.palette.count - 1)]
+            let baseColor = dm.castColor(for: vertex.processIdHex)
 
             let isHighlighted = highlightSet?.contains(vertex.digestHex) ?? false
             let isByz = vertex.isByzantineSource
@@ -266,19 +317,19 @@ extension DAGLayout {
 
         for (i, node) in nodes.enumerated() {
             let y = margin + (CGFloat(i) + 0.5) * laneHeight
-            let colorIdx = dm.colorIndex(for: node.processIdHex)
-            let color = DataManager.palette[min(colorIdx, DataManager.palette.count - 1)]
+            let role = dm.castRole(for: node.processIdHex)
+            let color = role.color
 
             // Color indicator dot
             let dotRect = CGRect(x: 8, y: y - 4, width: 8, height: 8)
             context.fill(Circle().path(in: dotRect), with: .color(color.opacity(0.7)))
 
-            // Name
-            let label = node.isByzantine ? "BYZ" : String(node.name.suffix(1))
+            // Cast name (or "Peer" for unnamed background validators)
+            let label = role.isNamedCast ? role.displayName : "Peer"
             context.draw(
                 Text(label)
                     .font(Self.fontCaption(scale: textScale))
-                    .foregroundColor(color.opacity(0.5)),
+                    .foregroundColor(color.opacity(role.isNamedCast ? 0.7 : 0.35)),
                 at: CGPoint(x: 30, y: y)
             )
 
