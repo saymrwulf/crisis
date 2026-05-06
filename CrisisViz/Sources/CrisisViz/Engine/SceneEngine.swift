@@ -48,6 +48,11 @@ final class SceneEngine {
     /// runtime at 1× ≈ 326 seconds — this is intentional pedagogical
     /// slo-mo; speed it up with the speed slider.
     private static let durationOverrides: [SceneAddress: Double] = [
+        // Ch00 — opener (3 scenes mapping to Ch00Timeline windows)
+        SceneAddress(chapter: 0, scene: 0): 16.0,
+        SceneAddress(chapter: 0, scene: 1): 14.0,
+        SceneAddress(chapter: 0, scene: 2): 13.5,
+        // Ch01 — gossip story (7 scenes mapping to Ch01Timeline windows)
         SceneAddress(chapter: 1, scene: 0): 69.0,
         SceneAddress(chapter: 1, scene: 1): 38.0,
         SceneAddress(chapter: 1, scene: 2): 67.5,

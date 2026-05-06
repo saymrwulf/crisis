@@ -155,9 +155,13 @@ struct ImmersiveView: View {
     /// every other chapter.
     private func liveNarration(localTime: Double) -> String {
         let addr = engine.address
-        if addr.chapter == 1 {
+        switch addr.chapter {
+        case 0:
+            return Ch00Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
+        case 1:
             return Ch01Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
+        default:
+            return SceneNarrations.narration(chapter: addr.chapter, scene: addr.scene)
         }
-        return SceneNarrations.narration(chapter: addr.chapter, scene: addr.scene)
     }
 }
