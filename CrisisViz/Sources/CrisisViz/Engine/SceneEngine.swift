@@ -3,10 +3,16 @@ import SwiftUI
 /// Observable engine driving the immersive linear scene flow.
 /// Single source of truth for scene-local time. Chapters consume `localTime(at:)`.
 ///
-/// Pause is FIRST-CLASS: when `isPlaying` is false, `localTime(at:)` returns
-/// the value it had when the user paused, frozen. Pressing play resumes from
-/// where time stopped. The app launches paused so the very first scene
-/// doesn't auto-scrub past its opening beats before the user gets oriented.
+/// Time is FIRST-CLASS:
+///
+///   - `isPlaying` toggles wall-clock advance.
+///   - `speed` is SIGNED. Positive = forward, negative = reverse,
+///     `0` = paused (regardless of `isPlaying`). Range −16…+16.
+///   - `chapterPosition(at:)` and `setChapterPosition(_:)` give the user
+///     a "master of time" handle: scrub freely to any point in the
+///     current chapter's continuous timeline, in either direction.
+///   - The app launches paused so the very first scene doesn't auto-scrub
+///     past its opening beats before the viewer gets oriented.
 @MainActor
 @Observable
 final class SceneEngine {
@@ -23,8 +29,14 @@ final class SceneEngine {
     /// survives system clock drift over the lifetime of one session.
     private var playSessionStart: Double? = nil
 
+    /// Signed playback speed. Negative values play in reverse; 0 freezes
+    /// time even if `isPlaying` is true. Clamped to [−16, +16].
     var speed: Double = 1.0
     let totalScenes: Int
+
+    /// Speed range exposed to the UI (signed, log-friendly).
+    static let speedMin: Double = -16
+    static let speedMax: Double = 16
 
     /// Monotonic counter; incremented on every stopAutoAdvance() to invalidate in-flight asyncAfter blocks.
     private var advanceGeneration: Int = 0
@@ -34,15 +46,15 @@ final class SceneEngine {
     /// windows of one continuous serial timeline (`Ch01Timeline`), so each
     /// scene's duration is the duration of its window. The total Ch01
     /// runtime at 1× ≈ 326 seconds — this is intentional pedagogical
-    /// slo-mo; speed it up with `adjustSpeed`.
+    /// slo-mo; speed it up with the speed slider.
     private static let durationOverrides: [SceneAddress: Double] = [
-        SceneAddress(chapter: 1, scene: 0): 69.0,   // Aaron writes α + sends to Ben
-        SceneAddress(chapter: 1, scene: 1): 38.0,   // α to Carl
-        SceneAddress(chapter: 1, scene: 2): 67.5,   // Ben writes β + sends to Aaron
-        SceneAddress(chapter: 1, scene: 3): 33.0,   // Carl writes γ — asymmetry
-        SceneAddress(chapter: 1, scene: 4): 37.0,   // γ to Aaron
-        SceneAddress(chapter: 1, scene: 5): 37.5,   // β to Carl
-        SceneAddress(chapter: 1, scene: 6): 44.5,   // γ to Ben + convergence
+        SceneAddress(chapter: 1, scene: 0): 69.0,
+        SceneAddress(chapter: 1, scene: 1): 38.0,
+        SceneAddress(chapter: 1, scene: 2): 67.5,
+        SceneAddress(chapter: 1, scene: 3): 33.0,
+        SceneAddress(chapter: 1, scene: 4): 37.0,
+        SceneAddress(chapter: 1, scene: 5): 37.5,
+        SceneAddress(chapter: 1, scene: 6): 44.5,
     ]
 
     /// Effective duration for the current scene, honoring overrides.
@@ -59,27 +71,67 @@ final class SceneEngine {
     }
 
     /// Compute scene-local time at a given wall-clock date, honoring pause
-    /// state. Speed scales the LIVE delta only — already-elapsed time is
-    /// preserved at whatever speed it was clocked at.
+    /// state and signed speed. localTime is clamped to [0, sceneDuration].
     func localTime(at date: Date) -> Double {
         guard let start = playSessionStart else {
             return accumulatedLocal
         }
         let live = (date.timeIntervalSinceReferenceDate - start) * speed
-        return max(0, accumulatedLocal + live)
+        let dur = sceneDurationFor(address)
+        return max(0, min(dur, accumulatedLocal + live))
     }
 
-    /// Progress within current scene (0..1), capped at 1. Honors per-scene
-    /// duration overrides so a long scene's progress bar doesn't max out
-    /// after only 8 seconds.
+    /// Progress within current scene (0..1), capped at 1.
     func progress(at date: Date) -> Double {
         min(1.0, localTime(at: date) / sceneDurationFor(address))
     }
 
     init() {
         self.totalScenes = AllChapters.totalScenes
-        // Launch paused at t=0. The user sees a still title frame and
-        // explicitly presses play (or the right arrow) to begin.
+        // Launch paused at t=0.
+    }
+
+    // MARK: - Chapter-level position (the slider's territory)
+
+    /// Total duration of the current chapter's timeline at 1× speed —
+    /// the sum of all its scenes' durations.
+    var currentChapterDuration: Double {
+        var t: Double = 0
+        for s in 0..<currentChapter.sceneCount {
+            t += sceneDurationFor(SceneAddress(chapter: address.chapter, scene: s))
+        }
+        return t
+    }
+
+    /// Position within the current chapter's timeline (0..currentChapterDuration).
+    func chapterPosition(at date: Date) -> Double {
+        var t: Double = 0
+        for s in 0..<address.scene {
+            t += sceneDurationFor(SceneAddress(chapter: address.chapter, scene: s))
+        }
+        return t + localTime(at: date)
+    }
+
+    /// Seek to an arbitrary point in the current chapter's timeline.
+    /// Resolves which scene that point falls in and updates accumulatedLocal.
+    /// Preserves `isPlaying` and `speed`.
+    func setChapterPosition(_ position: Double) {
+        let clamped = max(0, min(currentChapterDuration, position))
+        var remaining = clamped
+        let chapter = address.chapter
+        for s in 0..<currentChapter.sceneCount {
+            let dur = sceneDurationFor(SceneAddress(chapter: chapter, scene: s))
+            if remaining <= dur || s == currentChapter.sceneCount - 1 {
+                let target = SceneAddress(chapter: chapter, scene: s)
+                currentGlobal = target.globalIndex
+                accumulatedLocal = remaining
+                playSessionStart = isPlaying ? Date().timeIntervalSinceReferenceDate : nil
+                stopAutoAdvance()
+                if isPlaying { startAutoAdvance() }
+                return
+            }
+            remaining -= dur
+        }
     }
 
     // MARK: - Navigation
@@ -114,43 +166,46 @@ final class SceneEngine {
 
     func togglePlay() {
         if isPlaying {
-            // Pausing: capture the live delta into the accumulator so the
-            // next localTime() call returns exactly the frozen value.
             if let start = playSessionStart {
                 let now = Date().timeIntervalSinceReferenceDate
                 accumulatedLocal += (now - start) * speed
+                let dur = sceneDurationFor(address)
+                accumulatedLocal = max(0, min(dur, accumulatedLocal))
             }
             playSessionStart = nil
             isPlaying = false
             stopAutoAdvance()
         } else {
-            // Resuming: anchor a new live delta from the current accumulator.
             playSessionStart = Date().timeIntervalSinceReferenceDate
             isPlaying = true
             startAutoAdvance()
         }
     }
 
-    func adjustSpeed(delta: Double) {
-        // Capture current localTime at the OLD speed before changing speed,
-        // so the speed change doesn't retroactively scale already-elapsed time.
+    /// Set absolute speed. Captures whatever localTime the engine had at
+    /// the OLD speed so a speed change doesn't retroactively rescale the
+    /// time already elapsed.
+    func setSpeed(_ s: Double) {
+        let now = Date().timeIntervalSinceReferenceDate
         if let start = playSessionStart {
-            let now = Date().timeIntervalSinceReferenceDate
             accumulatedLocal += (now - start) * speed
+            let dur = sceneDurationFor(address)
+            accumulatedLocal = max(0, min(dur, accumulatedLocal))
             playSessionStart = now
         }
-        speed = max(0.25, min(4.0, speed + delta))
+        speed = max(Self.speedMin, min(Self.speedMax, s))
         if isPlaying {
             stopAutoAdvance()
             startAutoAdvance()
         }
     }
 
+    func adjustSpeed(delta: Double) {
+        setSpeed(speed + delta)
+    }
+
     // MARK: - Internals
 
-    /// Clear scene-local time. If the engine is currently in the playing
-    /// state, anchor a fresh play session from now; otherwise leave it nil
-    /// so the next localTime() call returns 0 cleanly.
     private func resetSceneTime(playing: Bool) {
         accumulatedLocal = 0
         playSessionStart = playing ? Date().timeIntervalSinceReferenceDate : nil
@@ -159,32 +214,62 @@ final class SceneEngine {
     private func currentLocalTimeNow() -> Double {
         guard let start = playSessionStart else { return accumulatedLocal }
         let live = (Date().timeIntervalSinceReferenceDate - start) * speed
-        return max(0, accumulatedLocal + live)
+        let dur = sceneDurationFor(address)
+        return max(0, min(dur, accumulatedLocal + live))
     }
 
+    /// Schedule a one-shot task that fires when localTime hits the next
+    /// scene boundary in the current direction of travel:
+    ///
+    ///   - speed > 0: fires when localTime reaches sceneDuration (advance)
+    ///   - speed < 0: fires when localTime reaches 0          (retreat)
+    ///   - speed == 0: never fires (frozen)
+    ///
+    /// Crossing a boundary jumps to the neighboring scene and re-anchors
+    /// localTime at the appropriate end.
     private func startAutoAdvance() {
         advanceGeneration += 1
         let myGen = advanceGeneration
-        // Auto-advance fires after the REMAINING time in this scene (so a
-        // pause→resume midway through Ch1.3 doesn't reset the 24s clock).
-        let remaining = sceneDurationFor(address) - currentLocalTimeNow()
-        let interval = max(0.05, remaining / max(0.1, speed))
+        let dur = sceneDurationFor(address)
+        let now = currentLocalTimeNow()
+
+        let interval: Double
+        if speed > 0.001 {
+            interval = max(0.05, (dur - now) / speed)
+        } else if speed < -0.001 {
+            interval = max(0.05, now / -speed)
+        } else {
+            return  // 0 speed → frozen, no advance
+        }
+
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(interval))
             guard let self, self.advanceGeneration == myGen, self.isPlaying else { return }
-            if self.currentGlobal < self.totalScenes - 1 {
-                self.currentGlobal += 1
-                self.resetSceneTime(playing: true)
-                self.startAutoAdvance()
-            } else {
-                self.isPlaying = false
-                self.playSessionStart = nil
+            if self.speed > 0.001 {
+                if self.currentGlobal < self.totalScenes - 1 {
+                    self.currentGlobal += 1
+                    self.resetSceneTime(playing: true)
+                    self.startAutoAdvance()
+                } else {
+                    self.isPlaying = false
+                    self.playSessionStart = nil
+                }
+            } else if self.speed < -0.001 {
+                if self.currentGlobal > 0 {
+                    self.currentGlobal -= 1
+                    let prevDur = self.sceneDurationFor(self.address)
+                    self.accumulatedLocal = prevDur
+                    self.playSessionStart = Date().timeIntervalSinceReferenceDate
+                    self.startAutoAdvance()
+                } else {
+                    self.isPlaying = false
+                    self.playSessionStart = nil
+                }
             }
         }
     }
 
     private func stopAutoAdvance() {
-        // Invalidate any pending asyncAfter blocks.
         advanceGeneration += 1
     }
 }
