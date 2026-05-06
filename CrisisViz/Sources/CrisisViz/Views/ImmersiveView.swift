@@ -47,25 +47,31 @@ struct ImmersiveView: View {
                 .background(.black)
             }
 
-            // Narration overlay — bottom left (dimmed while inspecting)
-            VStack {
-                Spacer()
-                HStack {
-                    GlassNarration(
-                        title: sceneTitle,
-                        narration: sceneNarration,
-                        chapterTitle: engine.currentChapter.title,
-                        chapterIndex: engine.address.chapter,
-                        sceneIndex: engine.address.scene,
-                        sceneCount: engine.currentChapter.sceneCount,
-                        globalSceneIndex: engine.address.globalIndex,
-                        totalScenes: AllChapters.totalScenes,
-                        isExpanded: $narrationExpanded
-                    )
+            // Narration overlay — bottom left (dimmed while inspecting).
+            // Wrapped in its OWN TimelineView so the displayed text
+            // updates at frame rate as the active beat changes (Ch01 is
+            // beat-bound; other chapters fall back to per-scene text).
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+                let live = engine.localTime(at: timeline.date)
+                VStack {
                     Spacer()
+                    HStack {
+                        GlassNarration(
+                            title: sceneTitle,
+                            narration: liveNarration(localTime: live),
+                            chapterTitle: engine.currentChapter.title,
+                            chapterIndex: engine.address.chapter,
+                            sceneIndex: engine.address.scene,
+                            sceneCount: engine.currentChapter.sceneCount,
+                            globalSceneIndex: engine.address.globalIndex,
+                            totalScenes: AllChapters.totalScenes,
+                            isExpanded: $narrationExpanded
+                        )
+                        Spacer()
+                    }
+                    .padding(.leading, 20)
+                    .padding(.bottom, 80)
                 }
-                .padding(.leading, 20)
-                .padding(.bottom, 80)
             }
             .opacity(inspection.isActive ? 0 : 1)
 
@@ -141,6 +147,17 @@ struct ImmersiveView: View {
 
     private var sceneNarration: String {
         let addr = engine.address
+        return SceneNarrations.narration(chapter: addr.chapter, scene: addr.scene)
+    }
+
+    /// Beat-bound narration for chapters that have a serial timeline
+    /// (currently only Ch01); falls back to scene-bound narration for
+    /// every other chapter.
+    private func liveNarration(localTime: Double) -> String {
+        let addr = engine.address
+        if addr.chapter == 1 {
+            return Ch01Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
+        }
         return SceneNarrations.narration(chapter: addr.chapter, scene: addr.scene)
     }
 }

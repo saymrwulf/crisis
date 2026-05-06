@@ -30,11 +30,19 @@ final class SceneEngine {
     private var advanceGeneration: Int = 0
     let sceneDuration: Double = 8.0
 
-    /// Per-(chapter,scene) duration overrides. Some scenes — notably the
-    /// Ch01 scene-3 slow-motion gossip dramatization — can't compress into
-    /// 8 seconds without losing the pedagogy. List them explicitly here.
+    /// Per-(chapter,scene) duration overrides. Ch01's 7 scenes are now
+    /// windows of one continuous serial timeline (`Ch01Timeline`), so each
+    /// scene's duration is the duration of its window. The total Ch01
+    /// runtime at 1× ≈ 326 seconds — this is intentional pedagogical
+    /// slo-mo; speed it up with `adjustSpeed`.
     private static let durationOverrides: [SceneAddress: Double] = [
-        SceneAddress(chapter: 1, scene: 3): 24.0   // gossip dramatization
+        SceneAddress(chapter: 1, scene: 0): 69.0,   // Aaron writes α + sends to Ben
+        SceneAddress(chapter: 1, scene: 1): 38.0,   // α to Carl
+        SceneAddress(chapter: 1, scene: 2): 67.5,   // Ben writes β + sends to Aaron
+        SceneAddress(chapter: 1, scene: 3): 33.0,   // Carl writes γ — asymmetry
+        SceneAddress(chapter: 1, scene: 4): 37.0,   // γ to Aaron
+        SceneAddress(chapter: 1, scene: 5): 37.5,   // β to Carl
+        SceneAddress(chapter: 1, scene: 6): 44.5,   // γ to Ben + convergence
     ]
 
     /// Effective duration for the current scene, honoring overrides.

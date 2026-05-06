@@ -23,11 +23,19 @@ enum SceneVideoCapture {
     /// auto-advance interval so each clip captures one nominal play-through.
     static let durationSeconds: Double = 8.0
 
-    /// Per-scene-address duration overrides — clips for these scenes run
-    /// longer so the scripted dramatization plays in full. Mirror this to
+    /// Per-scene-address duration overrides. Mirrors
     /// `SceneEngine.durationOverrides` so live and capture stay in sync.
+    /// Ch01 scenes carry the full serial timeline; clips for them are
+    /// long but that's intentional — they're meant for inspection of
+    /// every micro-beat.
     static let durationOverrides: [SceneAddress: Double] = [
-        SceneAddress(chapter: 1, scene: 3): 24.0   // Ch1.3 gossip script
+        SceneAddress(chapter: 1, scene: 0): 69.0,
+        SceneAddress(chapter: 1, scene: 1): 38.0,
+        SceneAddress(chapter: 1, scene: 2): 67.5,
+        SceneAddress(chapter: 1, scene: 3): 33.0,
+        SceneAddress(chapter: 1, scene: 4): 37.0,
+        SceneAddress(chapter: 1, scene: 5): 37.5,
+        SceneAddress(chapter: 1, scene: 6): 44.5,
     ]
 
     static func durationFor(_ address: SceneAddress) -> Double {
