@@ -197,12 +197,17 @@ struct Ch02_Graph: View {
             renderStagedBeat(in: &context, size: size, time: time,
                              layout: layout, visibleVerts: visibleVerts,
                              visibleEdges: visibleEdges, snap: snap)
-            // Scene 2 adds the per-character perspective panel below — it
-            // makes "three perspectives, one nucleus of shared truth"
-            // physically visible rather than just narrated.
-            if sceneIndex == 2 {
-                drawPerspectivePanel(in: &context, size: size, time: time, snap: snap)
-            }
+            // Per-character perspective panel — at the TOP of the canvas
+            // (the BOTTOM is reserved for `GlassNarration`, which would
+            // otherwise hide the panel in the live app even though the MP4
+            // testbed renders it). The "knows" set for each cast member is
+            // derived from the parent edges of the currently visible
+            // staged vertices, NOT from the full step-5 snapshot — so the
+            // panel never names a vertex that isn't on screen.
+            drawStagedPerspectivePanel(
+                in: &context, size: size, time: time,
+                visibleVerts: visibleVerts, visibleEdges: visibleEdges
+            )
 
         case 3:
             // Scene 3 is now the dedicated slow-motion gossip dramatization.
@@ -282,149 +287,510 @@ struct Ch02_Graph: View {
             }
 
         case 4:
-            // Commit-reveal
-            layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.3, lineWidth: 1.2)
-            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
-
-            let parentMap = buildParentMap(edges: visibleEdges)
-            // Pick a vertex with parents that's well within the visible area (not at edges)
-            if let (child, parents) = findVertexWithParents(vertices: visibleVerts, parentMap: parentMap, layout: layout, canvasSize: size) {
-                if let cp = layout.positions[child.digestHex] {
-                    let r: CGFloat = 20
-                    context.stroke(Circle().path(in: CGRect(x: cp.x - r, y: cp.y - r, width: r*2, height: r*2)),
-                                  with: .color(.white), lineWidth: 3)
-
-                    // Position label above or below depending on space
-                    let labelY = cp.y > size.height * 0.3 ? cp.y - 34 : cp.y + 34
-                    context.draw(
-                        Text("hash(C) = \(String(child.digestHex.prefix(8)))...")
-                            .font(DAGLayout.fontHeading(scale: settings.textScale))
-                            .foregroundColor(.white.opacity(0.9)),
-                        at: CGPoint(x: cp.x, y: labelY)
-                    )
-
-                    for parent in parents.prefix(3) {
-                        if let pp = layout.positions[parent] {
-                            let flash = 0.5 + 0.4 * sin(time * 2)
-                            let hiddenRect = CGRect(x: pp.x - 35, y: pp.y - 26, width: 70, height: 18)
-                            context.fill(RoundedRectangle(cornerRadius: 3).path(in: hiddenRect),
-                                        with: .color(.red.opacity(0.2 * flash)))
-                            context.draw(
-                                Text("HIDDEN")
-                                    .font(DAGLayout.fontCaption(scale: settings.textScale))
-                                    .foregroundColor(.red.opacity(0.8 * flash)),
-                                at: CGPoint(x: pp.x, y: pp.y - 18)
-                            )
-                        }
-                    }
-                }
-            }
+            // "Hashes are one-way" — slo-mo cast vignette. No dense graph;
+            // we morph from the gossip script's α envelope into a SHA-256
+            // demonstration. Lanes still draw underneath as the chapter's
+            // visual through-line.
+            renderHashOneWayVignette(in: &context, size: size, time: time)
+            return
 
         case 5:
-            // Graph identity
-            layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.3, lineWidth: 1.2)
-            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, visibleCount: visCount, textScale: settings.textScale)
-
-            let alpha = 0.5 + 0.2 * sin(time * 1.5)
-            context.draw(
-                Text("SAME MESSAGES → SAME GRAPH — DETERMINISTIC")
-                    .font(DAGLayout.fontTitle(scale: settings.textScale))
-                    .foregroundColor(.cyan.opacity(alpha)),
-                at: CGPoint(x: size.width / 2, y: size.height / 2)
-            )
+            // "Each player keeps a LOCAL DAG; same messages → same graph"
+            // — slo-mo dual-pane comparison of Aaron's and Ben's local
+            // views, populated from the same scripted messages used in
+            // scene 3 so the chapter narrative carries forward.
+            renderLocalDAGDeterminismVignette(in: &context, size: size, time: time)
+            return
 
         case 6:
-            // Ancestor cone — every vertex reachable by walking parent edges
-            // backward from the chosen leaf. The ORIGINAL implementation drew
-            // a single chain (one parent per hop), but vertices have MULTIPLE
-            // parents — walking back fans out into a tree/cone, not a line.
-            // The user called this out: "It is more like a tree, not line by
-            // line, no?"
-            layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.20, lineWidth: 1.0)
-            layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm,
-                              showLabels: true, textScale: settings.textScale)
-
-            // Pick a recent, well-connected vertex as the leaf to trace back
-            // from. Highest-round, highest-weight wins.
-            let leaf = visibleVerts.max { lhs, rhs in
-                if lhs.round != rhs.round { return lhs.round < rhs.round }
-                return lhs.weight < rhs.weight
-            }
-            if let leaf {
-                let cone = ancestorClosure(of: leaf.digestHex, edges: visibleEdges, depth: 8)
-                let coneEdges = visibleEdges.filter {
-                    cone.contains($0.from) && cone.contains($0.to)
-                }
-                // Highlight every cone edge in yellow.
-                for e in coneEdges {
-                    layout.drawArrowEdge(
-                        in: &context,
-                        from: e.from, to: e.to,
-                        color: .yellow, alpha: 0.85,
-                        lineWidth: 2.0,
-                        headLength: 9, headWidth: 6,
-                        startInset: 13, endInset: 14
-                    )
-                }
-                // Halo every cone vertex in yellow.
-                for hex in cone {
-                    if let pos = layout.positions[hex] {
-                        let r: CGFloat = 14
-                        context.stroke(
-                            Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r, width: r*2, height: r*2)),
-                            with: .color(.yellow.opacity(0.7)), lineWidth: 1.8
-                        )
-                    }
-                }
-                // Tag the leaf and identify the GENESIS root(s).
-                if let pos = layout.positions[leaf.digestHex] {
-                    context.draw(
-                        Text("LEAF — TRACE STARTS HERE")
-                            .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
-                            .foregroundColor(.yellow.opacity(0.95)),
-                        at: CGPoint(x: pos.x, y: pos.y - 26)
-                    )
-                }
-                // Genesis vertices are those in the cone with no outgoing
-                // parent edges in the cone (they don't point back further).
-                let coneSet = cone
-                let inCone: (String) -> Bool = { coneSet.contains($0) }
-                let genesisHexes = cone.filter { d in
-                    !visibleEdges.contains { $0.from == d && inCone($0.to) }
-                }
-                for hex in genesisHexes {
-                    if let pos = layout.positions[hex] {
-                        context.draw(
-                            Text("★ GENESIS")
-                                .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
-                                .foregroundColor(.yellow.opacity(0.95)),
-                            at: CGPoint(x: pos.x, y: pos.y + 24)
-                        )
-                    }
-                }
-            }
-
-            context.draw(
-                Text("ANCESTOR CONE — EVERY VERTEX FANS BACK INTO A TREE OF PARENTS, REACHING GENESIS")
-                    .font(DAGLayout.fontHeading(scale: settings.textScale))
-                    .foregroundColor(.yellow.opacity(0.55)),
-                at: CGPoint(x: size.width / 2, y: size.height - 50)
+            // Ancestor cone — but walked back ONE LEVEL AT A TIME. The
+            // earlier implementation revealed the entire cone instantly
+            // (the user's "totally static" complaint); now depth grows
+            // with `time` so the cone fans out in front of the viewer.
+            renderAncestorConeWalk(
+                in: &context, size: size, time: time,
+                layout: layout, visibleVerts: visibleVerts,
+                visibleEdges: visibleEdges
             )
+            return
 
         default:
             layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.3, lineWidth: 1.2)
             layout.drawVertices(in: &context, vertices: visibleVerts, nodes: nodes, dm: dm, showLabels: true, textScale: settings.textScale)
         }
 
-        // Vertex count — top center
+        // Vertex count — top right (the perspective panel now occupies the
+        // top-center band on staged scenes, so the count is parked in the
+        // corner where it doesn't fight for space).
         context.draw(
             Text("\(visCount)/\(allVertices.count) VERTICES · \(visibleEdges.count) EDGES")
                 .font(DAGLayout.fontCaption(scale: settings.textScale))
                 .foregroundColor(.white.opacity(0.25)),
-            at: CGPoint(x: size.width / 2, y: 16)
+            at: CGPoint(x: size.width - 130, y: 16)
         )
+    }
+
+    // MARK: - Scene 4: hash one-way vignette
+
+    /// Slow-motion demonstration of the "hash is a one-way function"
+    /// pedagogy. Carries Aaron's α envelope from the gossip script forward
+    /// (visual continuity with scene 3) and stages four beats:
+    ///
+    ///   t=0..1.5    α envelope slides into view from the left
+    ///   t=1.5..3.0  payload lines reveal one by one, then SHA arrow appears
+    ///   t=3.0..5.0  reverse arrow attempt — red ✗, "PREIMAGE IMPOSSIBLE"
+    ///   t=5.0..7.0  forward arrow restored — green ✓, "VERIFY DETERMINISTIC"
+    ///   t=7.0..8.0  bridge-line to chapter 8 (data availability)
+    private func renderHashOneWayVignette(
+        in context: inout GraphicsContext, size: CGSize, time: Double
+    ) {
+        // The same α from GossipScript so the cast continuity is intact.
+        let alpha = GossipScript.ch01.messages.first { $0.id == "α" }!
+        let cardW: CGFloat = min(360, size.width * 0.30)
+        let cardH: CGFloat = 200
+        let cy: CGFloat = size.height * 0.52
+        let cardX: CGFloat = size.width * 0.18
+        let cardRect = CGRect(x: cardX, y: cy - cardH / 2,
+                              width: cardW, height: cardH)
+
+        // Slide-in interpolation (eased)
+        let slideRaw = max(0, min(1, time / 1.5))
+        let slideEased = 1 - pow(1 - slideRaw, 3)
+        let cardOpacity = slideEased
+        let actualX = cardX - 80 * (1 - slideEased)
+        let drawnRect = cardRect.offsetBy(dx: actualX - cardX, dy: 0)
+
+        // Card background
+        context.fill(RoundedRectangle(cornerRadius: 14).path(in: drawnRect),
+                    with: .color(.black.opacity(0.7 * cardOpacity)))
+        context.stroke(RoundedRectangle(cornerRadius: 14).path(in: drawnRect),
+                      with: .color(Cast.coral.opacity(0.85 * cardOpacity)),
+                      lineWidth: 1.5)
+
+        // Card title
+        context.draw(
+            Text("MESSAGE α — AARON")
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                .foregroundColor(Cast.coral.opacity(0.95 * cardOpacity)),
+            at: CGPoint(x: drawnRect.midX, y: drawnRect.minY + 18)
+        )
+
+        // Payload lines fade in serially between t=1.5 and 3.0
+        let lines = [
+            "from: aaron",
+            "round: 0",
+            "parents: []",
+            "payload: \(alpha.payload)",
+        ]
+        for (i, line) in lines.enumerated() {
+            let lineFade = max(0, min(1, (time - 1.5 - Double(i) * 0.25) / 0.4))
+            context.draw(
+                Text(line)
+                    .font(.system(size: settings.scaled(10), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.85 * lineFade)),
+                at: CGPoint(x: drawnRect.minX + 16 + 70,
+                            y: drawnRect.minY + 50 + CGFloat(i) * 22)
+            )
+        }
+
+        // Hash bubble to the right of the card
+        let hashFade = max(0, min(1, (time - 2.6) / 0.6))
+        let hashBubbleW: CGFloat = 200
+        let hashBubbleH: CGFloat = 80
+        let hashCenter = CGPoint(x: drawnRect.maxX + 220, y: drawnRect.midY)
+        let hashRect = CGRect(x: hashCenter.x - hashBubbleW / 2,
+                              y: hashCenter.y - hashBubbleH / 2,
+                              width: hashBubbleW, height: hashBubbleH)
+        context.fill(RoundedRectangle(cornerRadius: 10).path(in: hashRect),
+                    with: .color(.black.opacity(0.7 * hashFade)))
+        context.stroke(RoundedRectangle(cornerRadius: 10).path(in: hashRect),
+                      with: .color(.white.opacity(0.5 * hashFade)),
+                      lineWidth: 1.2)
+        context.draw(
+            Text("hash(α)")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7 * hashFade)),
+            at: CGPoint(x: hashRect.midX, y: hashRect.minY + 16)
+        )
+        context.draw(
+            Text("\(alpha.hashShort)…")
+                .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
+                .foregroundColor(Cast.coral.opacity(0.95 * hashFade)),
+            at: CGPoint(x: hashRect.midX, y: hashRect.midY + 6)
+        )
+        context.draw(
+            Text("(SHA-256)")
+                .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.4 * hashFade)),
+            at: CGPoint(x: hashRect.midX, y: hashRect.maxY - 12)
+        )
+
+        // Forward arrow body → hash
+        let arrowFade = hashFade
+        var fwd = Path()
+        let fwdStart = CGPoint(x: drawnRect.maxX + 8, y: drawnRect.midY)
+        let fwdEnd   = CGPoint(x: hashRect.minX - 8, y: hashRect.midY)
+        fwd.move(to: fwdStart)
+        fwd.addLine(to: fwdEnd)
+        let goodPhase = time > 5.0
+        let fwdColor: Color = goodPhase ? .green : .white
+        context.stroke(fwd, with: .color(fwdColor.opacity(0.8 * arrowFade)), lineWidth: 2.0)
+        // Arrowhead
+        let head1 = CGPoint(x: fwdEnd.x - 10, y: fwdEnd.y - 6)
+        let head2 = CGPoint(x: fwdEnd.x - 10, y: fwdEnd.y + 6)
+        var headPath = Path()
+        headPath.move(to: fwdEnd); headPath.addLine(to: head1)
+        headPath.move(to: fwdEnd); headPath.addLine(to: head2)
+        context.stroke(headPath, with: .color(fwdColor.opacity(0.8 * arrowFade)), lineWidth: 2.0)
+
+        // Reverse arrow during 3.0..5.0
+        if time > 3.0 {
+            let revFade = max(0, min(1, (time - 3.0) / 0.6))
+            // Hide the reverse during forward-verify phase (after 5.0)
+            let revAlive = max(0, min(1, (5.0 - time) / 0.6))
+            let revOpacity = revFade * (time < 5.0 ? 1.0 : revAlive)
+            var rev = Path()
+            let revStart = CGPoint(x: hashRect.minX - 8, y: hashRect.midY + 22)
+            let revEnd   = CGPoint(x: drawnRect.maxX + 8, y: drawnRect.midY + 22)
+            rev.move(to: revStart)
+            rev.addLine(to: revEnd)
+            let dashed = StrokeStyle(lineWidth: 2.0, dash: [6, 4])
+            context.stroke(rev, with: .color(.red.opacity(0.85 * revOpacity)),
+                          style: dashed)
+            // Big red ✗ at midpoint
+            let mid = CGPoint(x: (revStart.x + revEnd.x) / 2,
+                              y: (revStart.y + revEnd.y) / 2)
+            context.draw(
+                Text("✗")
+                    .font(.system(size: settings.scaled(28), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.red.opacity(revOpacity)),
+                at: mid
+            )
+            context.draw(
+                Text("PREIMAGE IMPOSSIBLE — HASH ALONE TELLS YOU NOTHING")
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.red.opacity(0.9 * revOpacity)),
+                at: CGPoint(x: size.width / 2, y: drawnRect.maxY + 36)
+            )
+        }
+
+        // Forward verify ✓ at 5.0..7.0
+        if time > 5.0 {
+            let verFade = max(0, min(1, (time - 5.0) / 0.6))
+            context.draw(
+                Text("✓")
+                    .font(.system(size: settings.scaled(20), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.95 * verFade)),
+                at: CGPoint(x: (fwdStart.x + fwdEnd.x) / 2, y: drawnRect.midY - 22)
+            )
+            context.draw(
+                Text("VERIFY: BODY → HASH IS DETERMINISTIC. RECEIVERS RECOMPUTE THE HASH AND CHECK IT MATCHES.")
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.9 * verFade)),
+                at: CGPoint(x: size.width / 2, y: drawnRect.maxY + 36)
+            )
+        }
+
+        // Bridge-line to Ch08 at the bottom
+        if time > 7.0 {
+            let endFade = max(0, min(1, (time - 7.0) / 0.6))
+            context.draw(
+                Text("→ DATA AVAILABILITY (CHAPTER 8) IS WHY THIS MATTERS:  IF YOU LOSE THE BODY YOU CAN'T VERIFY ANYTHING.")
+                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
+                    .foregroundColor(.yellow.opacity(0.85 * endFade)),
+                at: CGPoint(x: size.width / 2, y: size.height - 56)
+            )
+        }
+    }
+
+    // MARK: - Scene 5: local DAG / determinism vignette
+
+    /// Two parallel "local DAG" panes — one for Aaron, one for Ben — that
+    /// fill in identically as gossip catches up. The lesson is "same set
+    /// of messages received → same graph computed". Uses the SAME α/β/γ
+    /// scripted messages from scene 3 so the chapter's gossip story
+    /// continues uninterrupted.
+    private func renderLocalDAGDeterminismVignette(
+        in context: inout GraphicsContext, size: CGSize, time: Double
+    ) {
+        let paneWidth: CGFloat = (size.width - 100) / 2
+        let paneHeight: CGFloat = size.height * 0.55
+        let paneY: CGFloat = size.height * 0.20
+        let leftPaneX: CGFloat = 30
+        let rightPaneX: CGFloat = size.width - 30 - paneWidth
+
+        // Slide-in fade
+        let slideRaw = max(0, min(1, time / 1.0))
+        let slideOpacity = pow(slideRaw, 1.4)
+
+        // Each pane's "received timeline" — when each message arrives.
+        // Aaron's: α at t=2 (his own), β at t=4 (Ben gossips), γ at t=6 (Carl gossips).
+        // Ben's:   α at t=2.5 (received), β at t=4 (his own), γ at t=6 (Carl gossips).
+        // Identical FINAL state at t=6+; identical visualization confirms determinism.
+        struct ReceiveEvent { let id: String; let t: Double; let color: Color }
+        let aaronTimeline: [ReceiveEvent] = [
+            ReceiveEvent(id: "α", t: 2.0, color: Cast.coral),
+            ReceiveEvent(id: "β", t: 4.0, color: Cast.teal),
+            ReceiveEvent(id: "γ", t: 6.0, color: Cast.amber),
+        ]
+        let benTimeline: [ReceiveEvent] = [
+            ReceiveEvent(id: "α", t: 2.5, color: Cast.coral),
+            ReceiveEvent(id: "β", t: 4.0, color: Cast.teal),
+            ReceiveEvent(id: "γ", t: 6.0, color: Cast.amber),
+        ]
+
+        func drawPane(label: String, accent: Color, x: CGFloat, timeline: [ReceiveEvent]) {
+            let rect = CGRect(x: x, y: paneY, width: paneWidth, height: paneHeight)
+            context.fill(RoundedRectangle(cornerRadius: 14).path(in: rect),
+                        with: .color(.black.opacity(0.45 * slideOpacity)))
+            context.stroke(RoundedRectangle(cornerRadius: 14).path(in: rect),
+                          with: .color(accent.opacity(0.7 * slideOpacity)),
+                          lineWidth: 1.5)
+            context.draw(
+                Text(label)
+                    .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
+                    .foregroundColor(accent.opacity(0.95 * slideOpacity)),
+                at: CGPoint(x: rect.midX, y: rect.minY + 22)
+            )
+            // Three vertex slots laid out left → right inside the pane.
+            for (i, evt) in timeline.enumerated() {
+                let slotX = rect.minX + 60 + CGFloat(i) * (rect.width - 120) / 2
+                let slotY = rect.midY + 6
+                let arrived = max(0, min(1, (time - evt.t) / 0.6))
+                let r: CGFloat = 28
+                let circleRect = CGRect(x: slotX - r, y: slotY - r, width: r * 2, height: r * 2)
+                // Empty placeholder ring before arrival
+                context.stroke(Circle().path(in: circleRect),
+                              with: .color(.white.opacity(0.18 * slideOpacity)),
+                              lineWidth: 1.0)
+                if arrived > 0 {
+                    context.fill(Circle().path(in: circleRect),
+                                with: .color(evt.color.opacity(0.85 * arrived)))
+                    context.stroke(Circle().path(in: circleRect),
+                                  with: .color(.white.opacity(0.5 * arrived)),
+                                  lineWidth: 1.4)
+                    context.draw(
+                        Text(evt.id)
+                            .font(.system(size: settings.scaled(20), weight: .heavy, design: .monospaced))
+                            .foregroundColor(.white.opacity(arrived)),
+                        at: CGPoint(x: slotX, y: slotY)
+                    )
+                }
+                // Parent edge α → β, α → γ, drawn in once both endpoints have arrived.
+                if i > 0 {
+                    let bothArrived = arrived > 0.6 && (time - timeline[0].t) / 0.6 > 0.6
+                    if bothArrived {
+                        let prevX = rect.minX + 60
+                        let edgeFade = max(0, min(1, (time - evt.t - 0.4) / 0.6))
+                        var path = Path()
+                        path.move(to: CGPoint(x: slotX - r - 1, y: slotY))
+                        path.addLine(to: CGPoint(x: prevX + r + 1, y: slotY))
+                        context.stroke(path,
+                                      with: .color(.white.opacity(0.45 * edgeFade)),
+                                      lineWidth: 1.4)
+                    }
+                }
+            }
+        }
+        drawPane(label: "AARON'S LOCAL DAG", accent: Cast.coral,
+                 x: leftPaneX, timeline: aaronTimeline)
+        drawPane(label: "BEN'S LOCAL DAG", accent: Cast.teal,
+                 x: rightPaneX, timeline: benTimeline)
+
+        // Convergence flash + caption once both panes are fully populated.
+        let aaronComplete = aaronTimeline.allSatisfy { time >= $0.t + 0.6 }
+        let benComplete = benTimeline.allSatisfy { time >= $0.t + 0.6 }
+        if aaronComplete && benComplete {
+            let convergeFade = max(0, min(1, (time - max(aaronTimeline.last!.t,
+                                                          benTimeline.last!.t) - 0.4) / 0.8))
+            let pulse = 0.7 + 0.3 * sin(time * 2)
+            context.draw(
+                Text("SAME MESSAGES → SAME GRAPH — BYTE-FOR-BYTE")
+                    .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.green.opacity(0.95 * convergeFade * pulse)),
+                at: CGPoint(x: size.width / 2, y: paneY + paneHeight + 30)
+            )
+            // Equality bar between the panes.
+            let barY = size.height / 2
+            var bar = Path()
+            bar.move(to: CGPoint(x: leftPaneX + paneWidth + 4, y: barY - 6))
+            bar.addLine(to: CGPoint(x: rightPaneX - 4, y: barY - 6))
+            bar.move(to: CGPoint(x: leftPaneX + paneWidth + 4, y: barY + 6))
+            bar.addLine(to: CGPoint(x: rightPaneX - 4, y: barY + 6))
+            context.stroke(bar,
+                          with: .color(.green.opacity(0.85 * convergeFade)),
+                          lineWidth: 2.0)
+        } else {
+            context.draw(
+                Text("EACH PLAYER BUILDS THEIR OWN LOCAL DAG. GOSSIP DELIVERS THE SAME MESSAGES TO BOTH.")
+                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.65 * slideOpacity)),
+                at: CGPoint(x: size.width / 2, y: paneY + paneHeight + 30)
+            )
+        }
+    }
+
+    // MARK: - Scene 6: ancestor cone walk-back
+
+    /// Slow walk back from a chosen leaf vertex, expanding the ancestor
+    /// cone ONE LEVEL per second instead of revealing it all at once. Cast
+    /// vertices in the cone get cast-colored highlights so Aaron/Ben/Carl
+    /// can be tracked across hops; pure-peer ancestors stay in yellow.
+    private func renderAncestorConeWalk(
+        in context: inout GraphicsContext, size: CGSize, time: Double,
+        layout: DAGLayout, visibleVerts: [VertexData], visibleEdges: [EdgeData]
+    ) {
+        // Background graph at very low alpha — gives the cone something
+        // to stand against without competing for attention.
+        layout.drawEdges(in: &context, edges: visibleEdges, alpha: 0.15, lineWidth: 0.9)
+        layout.drawVertices(
+            in: &context, vertices: visibleVerts,
+            nodes: dm.castOrderedNodes(), dm: dm,
+            showLabels: false, textScale: settings.textScale
+        )
+
+        // Pick the leaf — prefer Aaron's latest visible vertex so the
+        // walk-back reads as "Aaron's history".
+        let aaronPid = pid(of: Cast.aaron)
+        let aaronLeaf = visibleVerts.filter { $0.processIdHex == aaronPid }
+            .max { $0.round < $1.round }
+        let leaf = aaronLeaf ?? visibleVerts.max { $0.round < $1.round }
+        guard let leaf else { return }
+        guard let leafPos = layout.positions[leaf.digestHex] else { return }
+
+        // BFS layers from the leaf outward — done UP-FRONT so we can pace
+        // the reveal to fit the 8-second scene regardless of cone depth.
+        var layersByDepth: [[String]] = [[leaf.digestHex]]
+        var seen: Set<String> = [leaf.digestHex]
+        var frontier: [String] = [leaf.digestHex]
+        let maxDepth = 8
+        for _ in 0..<maxDepth {
+            var next: [String] = []
+            for hex in frontier {
+                for e in visibleEdges where e.from == hex {
+                    if !seen.contains(e.to) {
+                        seen.insert(e.to)
+                        next.append(e.to)
+                    }
+                }
+            }
+            if next.isEmpty { break }
+            layersByDepth.append(next)
+            frontier = next
+        }
+
+        // Pace the reveal so the full cone finishes within the 8-second
+        // scene window: warmup + totalDepth × levelTime ≈ 7 seconds, leaving
+        // ~1 second for the genesis-star fade-in to read clearly.
+        let totalDepthLayers = max(1, layersByDepth.count - 1)
+        let warmup: Double = 1.0
+        let levelTime: Double = max(0.6, (7.0 - warmup) / Double(totalDepthLayers))
+        let depthRaw = max(0, (time - warmup) / levelTime)
+        let depthFloor = Int(depthRaw)
+        let levelProgress = max(0, min(1, depthRaw - Double(depthFloor)))
+
+        // Highlight leaf
+        let leafHaloPulse = 0.6 + 0.3 * sin(time * 2.4)
+        let leafR: CGFloat = 22
+        context.stroke(
+            Circle().path(in: CGRect(x: leafPos.x - leafR, y: leafPos.y - leafR,
+                                      width: leafR * 2, height: leafR * 2)),
+            with: .color(.yellow.opacity(0.95 * leafHaloPulse)),
+            lineWidth: 2.5
+        )
+        context.draw(
+            Text("LEAF — TRACE STARTS HERE")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(.yellow.opacity(0.95)),
+            at: CGPoint(x: leafPos.x, y: leafPos.y - 32)
+        )
+
+        // For each completed depth, draw edges + halo at full strength.
+        // For the current depth-in-progress, fade in proportionally.
+        for d in 1...max(1, depthFloor + 1) {
+            guard d < layersByDepth.count else { break }
+            let isCurrent = (d == depthFloor + 1)
+            let alpha: Double = isCurrent ? Double(levelProgress) : 1.0
+            // Edges from the previous layer's vertices into this layer
+            for hex in layersByDepth[d] {
+                guard let pos = layout.positions[hex] else { continue }
+                let r: CGFloat = 14
+                // Cast color ring if hex belongs to a cast member
+                let castColor = castColorForVertex(hex: hex)
+                let ringColor = castColor ?? .yellow
+                context.stroke(
+                    Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r,
+                                              width: r * 2, height: r * 2)),
+                    with: .color(ringColor.opacity(0.8 * alpha)),
+                    lineWidth: 1.8
+                )
+                // Edge from this vertex back to whichever ancestor in layer d-1 sent the
+                // gossip — practically: any edge.from this hex to a vertex in layer d-1.
+                for e in visibleEdges where e.from == hex && layersByDepth[d - 1].contains(e.to) {
+                    layout.drawArrowEdge(
+                        in: &context,
+                        from: e.from, to: e.to,
+                        color: ringColor, alpha: 0.85 * alpha,
+                        lineWidth: 1.8,
+                        headLength: 8, headWidth: 5,
+                        startInset: 13, endInset: 13
+                    )
+                }
+            }
+        }
+
+        // Genesis stars when the BFS is fully expanded.
+        let totalDepthSteps = totalDepthLayers
+        let revealedAll = depthFloor >= totalDepthSteps
+        if revealedAll {
+            let genesisFade = max(0, min(1, (time - warmup - Double(totalDepthSteps) * levelTime - 0.2) / 0.6))
+            // A "genesis" vertex is one in the cone whose outgoing parent edges
+            // (within visibleEdges) all leave the cone — it doesn't point
+            // back further within the cone we have on screen.
+            let coneSet = seen
+            let genesisHexes = coneSet.filter { d in
+                !visibleEdges.contains { $0.from == d && coneSet.contains($0.to) }
+            }
+            for hex in genesisHexes {
+                if let pos = layout.positions[hex] {
+                    context.draw(
+                        Text("★ GENESIS")
+                            .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
+                            .foregroundColor(.yellow.opacity(0.95 * genesisFade)),
+                        at: CGPoint(x: pos.x, y: pos.y + 24)
+                    )
+                }
+            }
+        }
+
+        // Caption tracks the current depth so the viewer can pace.
+        let depthLabel: String
+        if depthFloor == 0 {
+            depthLabel = "DEPTH 0 — JUST THE LEAF"
+        } else if revealedAll {
+            depthLabel = "REACHED GENESIS — \(seen.count) ANCESTORS · \(layersByDepth.count - 1) HOPS"
+        } else {
+            depthLabel = "WALKING BACK · DEPTH \(depthFloor) → \(depthFloor + 1)"
+        }
+        context.draw(
+            Text(depthLabel)
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                .foregroundColor(.yellow.opacity(0.85)),
+            at: CGPoint(x: size.width / 2, y: size.height - 56)
+        )
+    }
+
+    private func castColorForVertex(hex: String) -> Color? {
+        guard let snap = dm.honestData(step: 5) else { return nil }
+        guard let v = snap.vertices.first(where: { $0.digestHex == hex }) else { return nil }
+        guard let role = dm.castByPid[v.processIdHex] else { return nil }
+        switch role.id {
+        case Cast.aaron.id: return Cast.coral
+        case Cast.ben.id:   return Cast.teal
+        case Cast.carl.id:  return Cast.amber
+        case Cast.dave.id:  return Cast.violet
+        default:            return nil
+        }
     }
 
     // MARK: - Helpers
@@ -532,18 +898,22 @@ struct Ch02_Graph: View {
         // visible. Dave is not in this dramatization yet (he debuts in
         // Ch02 partition).
         let cx = size.width / 2
+        // Cast positions sit BELOW the perspective panel band (panel spans
+        // y=14..110 + caption at y=120). The lower triangle keeps Aaron/Ben
+        // above the dramatization mid-band and Carl in the lower third.
         let layout: [GossipScript.CastRoleKey: CGPoint] = [
-            .aaron: CGPoint(x: cx - size.width * 0.30, y: size.height * 0.25),
-            .ben:   CGPoint(x: cx + size.width * 0.30, y: size.height * 0.25),
-            .carl:  CGPoint(x: cx,                     y: size.height * 0.66),
+            .aaron: CGPoint(x: cx - size.width * 0.30, y: size.height * 0.34),
+            .ben:   CGPoint(x: cx + size.width * 0.30, y: size.height * 0.34),
+            .carl:  CGPoint(x: cx,                     y: size.height * 0.70),
         ]
 
-        // Background grid + title
+        // Tiny clock in the bottom-right so the user can pace the scene
+        // without the title fighting the perspective panel for top space.
         context.draw(
-            Text(String(format: "GOSSIP MECHANICS · t=%.1fs / %.1fs", time, script.totalDuration))
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.45)),
-            at: CGPoint(x: cx, y: 24)
+            Text(String(format: "t=%.1fs / %.0fs", time, script.totalDuration))
+                .font(.system(size: settings.scaled(9), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.30)),
+            at: CGPoint(x: size.width - 64, y: size.height - 12)
         )
 
         // 1. Each cast member's "node + view bubble" rendered first as the
@@ -598,6 +968,30 @@ struct Ch02_Graph: View {
                 at: CGPoint(x: cx, y: size.height - 30)
             )
         }
+
+        // Perspective panel at the top — same component used by the staged
+        // scenes 0/1/2, just fed from the live `GossipScript` state. A
+        // message counts as "known" once the receive beat has finished
+        // (progress = 1.0); authors know their own message immediately on
+        // sealHash. This makes the asymmetric arrival timing visible at a
+        // glance ("Carl writes γ before β arrives" → COMMON KNOWLEDGE
+        // contains only α even after Ben writes β).
+        let items: [PanelItem] = [
+            PanelItem(label: "α", id: "α", color: Cast.coral),
+            PanelItem(label: "β", id: "β", color: Cast.teal),
+            PanelItem(label: "γ", id: "γ", color: Cast.amber),
+        ]
+        func gossipKnows(_ key: GossipScript.CastRoleKey) -> Set<String> {
+            let view = world.views[key] ?? GossipScript.ViewState()
+            return Set(view.received.compactMap { $0.value >= 1.0 ? $0.key : nil })
+        }
+        drawPerspectivePanel(
+            in: &context, size: size, time: time,
+            items: items,
+            aaronKnows: gossipKnows(.aaron),
+            benKnows:   gossipKnows(.ben),
+            carlKnows:  gossipKnows(.carl)
+        )
     }
 
     /// Cast member node — circle in their cast color with name underneath, plus
@@ -768,70 +1162,51 @@ struct Ch02_Graph: View {
         _ = progress
     }
 
-    /// Per-character "view" panel for scene 2. Each cast member maintains
-    /// their own local DAG — what they've personally received via gossip —
-    /// and those views differ. The panel makes the views explicit:
-    ///
-    ///   - AARON SEES: only his own message (nobody has gossiped him yet)
-    ///   - BEN SEES: his own + Aaron's (he received Aaron via gossip)
-    ///   - CARL SEES: his own + Aaron's (he received Aaron via gossip)
-    ///   - COMMON KNOWLEDGE: the intersection — Aaron's first message
-    ///
-    /// This is the "local consensus emerging" the user asked for: even with
-    /// three different perspectives, there's a NUCLEUS of shared truth, and
-    /// that nucleus grows with every round of gossip.
+    // MARK: - Perspective panel (Aaron/Ben/Carl/Common)
+
+    /// Compact display item for a vertex referenced by the panel.
+    private struct PanelItem {
+        let label: String
+        let id: String          // digest hex, or scripted message id ("α"/"β"/"γ")
+        let color: Color
+    }
+
+    /// Top-of-canvas perspective panel. Shows what each cast member has seen
+    /// so far + the common nucleus, regardless of whether the underlying
+    /// data is staged DAG vertices (scenes 0-2) or scripted gossip messages
+    /// (scene 3). Lives at the TOP of the canvas because the LIVE app
+    /// overlays `GlassNarration` at the bottom — anything drawn at the
+    /// bottom of the canvas would be hidden in the running app even if the
+    /// MP4 testbed (no overlay) renders it just fine.
     private func drawPerspectivePanel(
-        in context: inout GraphicsContext, size: CGSize, time: Double, snap: NodeSnapshot
+        in context: inout GraphicsContext, size: CGSize, time: Double,
+        items: [PanelItem],
+        aaronKnows: Set<String>,
+        benKnows: Set<String>,
+        carlKnows: Set<String>,
+        fadeStart: Double = 0.4,
+        fadeDuration: Double = 1.0
     ) {
-        // The panel fades in over the first 2.5s of the scene so the staged
-        // vertices read first, then the panel adds the deeper layer.
-        let fade = max(0, min(1, (time - 2.0) / 1.5))
+        let fade = max(0, min(1, (time - fadeStart) / fadeDuration))
         if fade < 0.05 { return }
 
-        // Per-cast local snapshots at the same step. If unavailable, skip.
-        guard let aaronView = dm.snapshot(forCastRole: Cast.aaron, step: 5),
-              let benView   = dm.snapshot(forCastRole: Cast.ben,   step: 5),
-              let carlView  = dm.snapshot(forCastRole: Cast.carl,  step: 5) else { return }
-
-        // The three cast vertices currently on canvas.
-        let aaronPid = dm.castByPid.first { $0.value.id == Cast.aaron.id }?.key
-        let benPid   = dm.castByPid.first { $0.value.id == Cast.ben.id   }?.key
-        let carlPid  = dm.castByPid.first { $0.value.id == Cast.carl.id  }?.key
-        let aaronR0Hex = snap.vertices.first(where: { $0.processIdHex == aaronPid })?.digestHex ?? ""
-        let benR2Hex   = snap.vertices.filter { $0.processIdHex == benPid }
-                            .max(by: { $0.round < $1.round })?.digestHex ?? ""
-        let carlR2Hex  = snap.vertices.filter { $0.processIdHex == carlPid }
-                            .max(by: { $0.round < $1.round })?.digestHex ?? ""
-
-        // Each character's view is the set of vertex digests they personally
-        // know about. We project onto the three "cast" vertices visible on
-        // the main canvas and check membership.
-        let aaronKnows = Set(aaronView.vertices.map(\.digestHex))
-        let benKnows = Set(benView.vertices.map(\.digestHex))
-        let carlKnows = Set(carlView.vertices.map(\.digestHex))
-        let castVertices: [(label: String, digest: String, color: Color)] = [
-            ("AARON", aaronR0Hex, Cast.coral),
-            ("BEN",   benR2Hex,   Cast.teal),
-            ("CARL",  carlR2Hex,  Cast.amber)
-        ]
         let common = aaronKnows.intersection(benKnows).intersection(carlKnows)
-
-        // Layout: 4 columns at the bottom — Aaron / Ben / Carl / Common.
-        let panelHeight: CGFloat = 110
-        let panelY = size.height - panelHeight - 16
+        let panels: [(title: String, knows: Set<String>, accent: Color, isCommon: Bool)] = [
+            ("AARON'S VIEW",     aaronKnows, Cast.coral, false),
+            ("BEN'S VIEW",       benKnows,   Cast.teal,  false),
+            ("CARL'S VIEW",      carlKnows,  Cast.amber, false),
+            ("COMMON KNOWLEDGE", common,     .green,     true),
+        ]
+        let panelHeight: CGFloat = 96
+        let panelY: CGFloat = 14   // top edge — clears narration overlay below
         let totalW = size.width - 60
         let colW = totalW / 4
-        let panels: [(title: String, knows: Set<String>, accent: Color, isCommon: Bool)] = [
-            ("AARON'S VIEW",       aaronKnows, Cast.coral, false),
-            ("BEN'S VIEW",         benKnows,   Cast.teal,  false),
-            ("CARL'S VIEW",        carlKnows,  Cast.amber, false),
-            ("COMMON KNOWLEDGE",   common,     .green,     true),
-        ]
+
         for (i, p) in panels.enumerated() {
             let x = 30 + CGFloat(i) * colW
             let rect = CGRect(x: x + 8, y: panelY, width: colW - 16, height: panelHeight)
             context.fill(RoundedRectangle(cornerRadius: 8).path(in: rect),
-                        with: .color(.black.opacity(0.45 * fade)))
+                        with: .color(.black.opacity(0.55 * fade)))
             context.stroke(RoundedRectangle(cornerRadius: 8).path(in: rect),
                           with: .color(p.accent.opacity((p.isCommon ? 0.9 : 0.55) * fade)),
                           lineWidth: p.isCommon ? 2 : 1)
@@ -841,41 +1216,41 @@ struct Ch02_Graph: View {
                     .foregroundColor(p.accent.opacity((p.isCommon ? 0.95 : 0.8) * fade)),
                 at: CGPoint(x: rect.midX, y: rect.minY + 14)
             )
-            // Three small vertex badges. Each one is bright if `p.knows`
-            // contains it, dim if not.
-            let dotY = rect.minY + 50
-            for (j, cv) in castVertices.enumerated() {
-                let cx = rect.minX + 22 + CGFloat(j) * (rect.width - 44) / 2
-                let known = p.knows.contains(cv.digest)
-                let dotR: CGFloat = 11
+            let dotY = rect.minY + 46
+            // Distribute up to 3 item dots evenly across the column. We use
+            // a fixed slot width so panels with 1 or 2 items stay aligned.
+            for (j, cv) in items.enumerated() {
+                let slotCount = max(1, items.count - 1)
+                let cx = rect.minX + 26 + CGFloat(j) * (rect.width - 52) / CGFloat(slotCount)
+                let known = p.knows.contains(cv.id)
+                let dotR: CGFloat = 10
                 let dotRect = CGRect(x: cx - dotR, y: dotY - dotR,
                                       width: dotR * 2, height: dotR * 2)
-                let bright = known ? 1.0 : 0.18
+                let bright = known ? 1.0 : 0.16
                 context.fill(Circle().path(in: dotRect),
                             with: .color(cv.color.opacity(bright * fade)))
                 context.stroke(Circle().path(in: dotRect),
-                              with: .color(.white.opacity((known ? 0.6 : 0.25) * fade)),
+                              with: .color(.white.opacity((known ? 0.6 : 0.22) * fade)),
                               lineWidth: 1)
                 context.draw(
                     Text(cv.label)
                         .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
-                        .foregroundColor(cv.color.opacity((known ? 0.95 : 0.30) * fade)),
-                    at: CGPoint(x: cx, y: dotY + dotR + 12)
+                        .foregroundColor(cv.color.opacity((known ? 0.95 : 0.28) * fade)),
+                    at: CGPoint(x: cx, y: dotY + dotR + 10)
                 )
-                // Checkmark / cross.
                 context.draw(
                     Text(known ? "✓" : "✗")
                         .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                         .foregroundColor((known ? Color.green : Color.red).opacity((known ? 0.9 : 0.5) * fade)),
-                    at: CGPoint(x: cx, y: dotY + dotR + 26)
+                    at: CGPoint(x: cx, y: dotY + dotR + 22)
                 )
             }
         }
 
-        // Caption: list every vertex shared by everyone, plus call out the
-        // ones that AREN'T shared so the asymmetry is visible.
-        let sharedLabels = castVertices.filter { common.contains($0.digest) }.map(\.label)
-        let unsharedLabels = castVertices.filter { !common.contains($0.digest) }.map(\.label)
+        // Caption directly under the panel band, summarizing the convergence
+        // state in one line.
+        let sharedLabels = items.filter { common.contains($0.id) }.map(\.label)
+        let unsharedLabels = items.filter { !common.contains($0.id) }.map(\.label)
         let captionTxt: String
         if sharedLabels.isEmpty {
             captionTxt = "DIFFERENT VIEWS · NO SHARED VERTEX YET · GOSSIP MUST CONTINUE"
@@ -888,7 +1263,62 @@ struct Ch02_Graph: View {
             Text(captionTxt)
                 .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.75 * fade)),
-            at: CGPoint(x: size.width / 2, y: panelY - 10)
+            at: CGPoint(x: size.width / 2, y: panelY + panelHeight + 10)
+        )
+    }
+
+    /// Staged-scene perspective panel (scenes 0/1/2). Derives each cast
+    /// member's "knows" set from the actual visible vertices + parent edges
+    /// so the panel never claims someone has seen a vertex that isn't on
+    /// screen. Each cast member knows:
+    ///   - their own staged vertex (if visible), and
+    ///   - every visible vertex their staged vertex points to as a parent.
+    ///
+    /// Scene 0 (Aaron alone): Aaron knows {α}; Ben/Carl know nothing.
+    /// Scene 1 (+Ben): Aaron knows {α}; Ben knows {α, β}; Carl nothing.
+    /// Scene 2 (+Carl): Aaron knows {α}; Ben knows {α, β}; Carl knows {α, γ};
+    ///                  COMMON = {α} (β and γ are still in flight).
+    private func drawStagedPerspectivePanel(
+        in context: inout GraphicsContext, size: CGSize, time: Double,
+        visibleVerts: [VertexData], visibleEdges: [EdgeData]
+    ) {
+        guard let aaronPid = pid(of: Cast.aaron),
+              let benPid   = pid(of: Cast.ben),
+              let carlPid  = pid(of: Cast.carl) else { return }
+
+        // Each cast member's chosen staged vertex (their earliest visible).
+        let aaronVerts = visibleVerts.filter { $0.processIdHex == aaronPid }
+        let benVerts   = visibleVerts.filter { $0.processIdHex == benPid }
+        let carlVerts  = visibleVerts.filter { $0.processIdHex == carlPid }
+        let aaronVx = aaronVerts.min(by: { $0.round < $1.round })
+        let benVx   = benVerts.min(by:   { $0.round < $1.round })
+        let carlVx  = carlVerts.min(by:  { $0.round < $1.round })
+
+        // Build "knows" sets edge-locally: each cast member knows their own
+        // vertex plus every visible parent it references.
+        func knowsOf(_ vx: VertexData?) -> Set<String> {
+            guard let vx else { return [] }
+            var set: Set<String> = [vx.digestHex]
+            for e in visibleEdges where e.from == vx.digestHex {
+                set.insert(e.to)
+            }
+            return set
+        }
+        let aaronKnows = knowsOf(aaronVx)
+        let benKnows   = knowsOf(benVx)
+        let carlKnows  = knowsOf(carlVx)
+
+        // Items always show all three cast slots so the panel layout stays
+        // stable across scenes 0/1/2 (only the dot brightness changes).
+        let items: [PanelItem] = [
+            PanelItem(label: "AARON", id: aaronVx?.digestHex ?? "—", color: Cast.coral),
+            PanelItem(label: "BEN",   id: benVx?.digestHex   ?? "—", color: Cast.teal),
+            PanelItem(label: "CARL",  id: carlVx?.digestHex  ?? "—", color: Cast.amber),
+        ]
+        drawPerspectivePanel(
+            in: &context, size: size, time: time,
+            items: items,
+            aaronKnows: aaronKnows, benKnows: benKnows, carlKnows: carlKnows
         )
     }
 
