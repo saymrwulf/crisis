@@ -76,6 +76,10 @@ final class SceneEngine {
         // Ch05 — leader (2 scenes)
         SceneAddress(chapter: 5, scene: 0): 29.0,
         SceneAddress(chapter: 5, scene: 1): 18.5,
+        // Ch06 — total order (3 scenes)
+        SceneAddress(chapter: 6, scene: 0): 22.5,
+        SceneAddress(chapter: 6, scene: 1): 14.0,
+        SceneAddress(chapter: 6, scene: 2): 15.0,
         // Ch09 — Byzantine (2 scenes mapping to Ch09Timeline windows)
         SceneAddress(chapter: 9, scene: 0): 47.5,
         SceneAddress(chapter: 9, scene: 1): 32.0,
