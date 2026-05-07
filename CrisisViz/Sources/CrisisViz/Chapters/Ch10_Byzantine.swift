@@ -1,18 +1,12 @@
 import SwiftUI
 
-/// Ch09 (file Ch10_Byzantine, user-facing chapter index 9): "Dave lies. Crisis catches him."
+/// Ch09 (chapter index 9, file Ch10_Byzantine.swift): "Dave lies. Crisis catches him."
 ///
-/// Two beats from the narration:
-///
-///   - Scene 0 ("Dave forks his message."): on the persistent lane base,
-///     Dave's `isByzantineSource` vertices are highlighted with red rings,
-///     multi-parent fork lines, and contrasting payloads. The viewer SEES
-///     Dave producing two contradictory messages from the same lane.
-///
-///   - Scene 1 ("The protocol routes around him."): Aaron, Ben, Carl
-///     converge on a total order DESPITE Dave's forks. Dave's vertices
-///     are X'd out; the f<n/3 shield asserts the byzantine resilience
-///     guarantee. The threshold bar appears below.
+/// Renders from `Ch09Timeline`. Dave creates two conflicting messages
+/// under the same identity (ζ_a, ζ_b), sends one to Aaron and the
+/// other to Ben, and tries to make them disagree. Aaron and Ben
+/// gossip; the fork is detected; Dave's vertices are banned; the
+/// honest 3 converge anyway.
 struct Ch10_Byzantine: View {
     let sceneIndex: Int
     let localTime: Double
@@ -20,250 +14,518 @@ struct Ch10_Byzantine: View {
     let dm: DataManager
     @Environment(AppSettings.self) private var settings
 
-    private let dataStep = 60  // post-convergence
-
     var body: some View {
         Canvas { context, size in
-            render(context: &context, size: size, time: localTime)
+            let t = Ch09Scenes.timelineT(sceneIndex: sceneIndex,
+                                          localTime: localTime)
+            render(in: &context, size: size, t: t)
         }
     }
 
-    private func render(context: inout GraphicsContext, size: CGSize, time: Double) {
-        guard let sim = dm.sim,
-              let snap = dm.honestData(step: dataStep) else { return }
+    private func render(in context: inout GraphicsContext, size: CGSize, t: Double) {
+        let world = Ch09Timeline.state(at: t)
 
-        let lanes = dm.castOrderedNodes()
-        let layout = DAGLayout.compute(
-            vertices: snap.vertices, edges: snap.edges, nodes: lanes,
-            canvasSize: CGSize(width: size.width, height: size.height * 0.65),
-            margin: 50
-        )
+        drawLanes(in: &context, size: size)
+        drawCastFigures(in: &context, size: size, t: t)
+        drawAcceptedVertices(in: &context, size: size, world: world)
+        drawDaveForks(in: &context, size: size, world: world, t: t)
 
-        let minRound = snap.vertices.map { $0.round }.min() ?? 0
-        layout.drawNodeLanes(in: &context, nodes: lanes,
-                             canvasSize: CGSize(width: size.width, height: size.height * 0.65),
-                             dm: dm, textScale: settings.textScale)
-        layout.drawRoundSeparators(
-            in: &context,
-            canvasSize: CGSize(width: size.width, height: size.height * 0.65),
-            minRound: minRound, alpha: 0.20, textScale: settings.textScale
-        )
-
-        // ─── Identify Dave and his byzantine vertices ────────────────────
-        let davePid = dm.castByPid.first(where: { $0.value.id == Cast.dave.id })?.key
-        let daveVertices = davePid.map { pid in
-            snap.vertices.filter { $0.processIdHex == pid }
-        } ?? []
-        let forkedVertices = daveVertices.filter { $0.isByzantineSource }
-
-        // Edges: dim everything; brighten edges that touch a forked vertex.
-        let forkedSet = Set(forkedVertices.map(\.digestHex))
-        for edge in snap.edges {
-            guard let from = layout.positions[edge.from],
-                  let to = layout.positions[edge.to] else { continue }
-            let touchesFork = forkedSet.contains(edge.from) || forkedSet.contains(edge.to)
-            let alpha = touchesFork ? 0.55 : 0.18
-            var path = Path()
-            path.move(to: from)
-            path.addLine(to: to)
-            context.stroke(path,
-                          with: .color((touchesFork ? Color.red : Color.white).opacity(alpha)),
-                          lineWidth: touchesFork ? 1.6 : 0.9)
+        if let thought = world.thought {
+            drawThoughtBubble(in: &context, size: size, thought: thought)
+        }
+        if let composing = world.composing {
+            drawComposingSlot(in: &context, size: size, composing: composing)
+        }
+        if let flight = world.inFlight {
+            drawForkFlight(in: &context, size: size, flight: flight)
+        }
+        if world.forkDetectedAlpha > 0 {
+            drawForkDetected(in: &context, size: size,
+                              alpha: world.forkDetectedAlpha)
+        }
+        if world.thresholdBarAlpha > 0 {
+            drawThresholdBar(in: &context, size: size,
+                              alpha: world.thresholdBarAlpha)
+        }
+        if world.convergedAlpha > 0 {
+            drawConvergedBadge(in: &context, size: size,
+                                alpha: world.convergedAlpha)
         }
 
-        // Vertices.
-        for vertex in snap.vertices {
-            guard let pos = layout.positions[vertex.digestHex] else { continue }
-            let role = dm.castRole(for: vertex.processIdHex)
-            let isForked = forkedSet.contains(vertex.digestHex)
+        drawPerceptionTowers(in: &context, size: size, world: world)
+        drawBeatTag(in: &context, size: size, world: world)
+    }
 
-            let r: CGFloat = 7 + CGFloat(min(vertex.weight, 8)) * 0.5
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            let baseColor = isForked ? Color.red : role.color
-            let alpha: Double = sceneIndex == 1 && isForked ? 0.4 : 0.85
-            context.fill(Circle().path(in: rect), with: .color(baseColor.opacity(alpha)))
+    // MARK: - Geometry / lookups
 
-            if isForked {
-                // Pulsing red halo around forked vertices.
-                let pulse = 0.5 + 0.5 * sin(time * 3 + Double(vertex.weight))
-                let haloR = r * 1.9 * pulse
-                let haloRect = CGRect(x: pos.x - haloR, y: pos.y - haloR,
-                                       width: haloR * 2, height: haloR * 2)
-                context.stroke(Circle().path(in: haloRect),
-                              with: .color(.red.opacity(0.4 * pulse)), lineWidth: 1.5)
+    private func castLaneY(_ laneIdx: Int, size: CGSize) -> CGFloat {
+        let margin: CGFloat = 60
+        let nodeCount: CGFloat = 7
+        let laneHeight = (size.height - 2 * margin) / nodeCount
+        return margin + (CGFloat(laneIdx) + 0.5) * laneHeight
+    }
 
-                // Scene 1: X out the forked vertex (banned).
-                if sceneIndex == 1 {
-                    let banAppear = min(1, time / 1.5)
-                    let xLen: CGFloat = r * 1.3 * CGFloat(banAppear)
-                    var x1 = Path()
-                    x1.move(to: CGPoint(x: pos.x - xLen, y: pos.y - xLen))
-                    x1.addLine(to: CGPoint(x: pos.x + xLen, y: pos.y + xLen))
-                    var x2 = Path()
-                    x2.move(to: CGPoint(x: pos.x + xLen, y: pos.y - xLen))
-                    x2.addLine(to: CGPoint(x: pos.x - xLen, y: pos.y + xLen))
-                    context.stroke(x1, with: .color(.red.opacity(0.95)), lineWidth: 2.5)
-                    context.stroke(x2, with: .color(.red.opacity(0.95)), lineWidth: 2.5)
+    private func castPosition(cast: Ch01Cast, size: CGSize) -> CGPoint {
+        let laneIdx: Int
+        switch cast {
+        case .aaron: laneIdx = 0
+        case .ben:   laneIdx = 1
+        case .carl:  laneIdx = 2
+        case .dave:  laneIdx = 3
+        }
+        return CGPoint(x: size.width * 0.20, y: castLaneY(laneIdx, size: size))
+    }
+
+    private func castColor(_ cast: Ch01Cast) -> Color {
+        switch cast {
+        case .aaron: return Cast.coral
+        case .ben:   return Cast.teal
+        case .carl:  return Cast.amber
+        case .dave:  return Cast.violet
+        }
+    }
+
+    private func authorOf(_ mid: String) -> Ch01Cast {
+        if mid.hasPrefix("ζ") { return .dave }
+        if let m = Ch01Timeline.messages[mid] { return m.author }
+        if let m = Ch02Timeline.messages[mid] { return m.author }
+        return .aaron
+    }
+
+    private func hashOf(_ mid: String) -> String {
+        if let info = Ch09Timeline.forkVersions[mid] { return info.hashShort }
+        if let m = Ch01Timeline.messages[mid] { return m.hashShort }
+        if let m = Ch02Timeline.messages[mid] { return m.hashShort }
+        return "????"
+    }
+
+    private static let initialMessages: [String] = ["α", "β", "γ", "δ", "ε"]
+
+    // MARK: - Lanes
+
+    private func drawLanes(in context: inout GraphicsContext, size: CGSize) {
+        let casts: [(Ch01Cast, Int)] = [(.aaron, 0), (.ben, 1), (.carl, 2), (.dave, 3)]
+        for (cast, idx) in casts {
+            let y = castLaneY(idx, size: size)
+            var path = Path()
+            path.move(to: CGPoint(x: 36, y: y))
+            path.addLine(to: CGPoint(x: size.width - 24, y: y))
+            context.stroke(path, with: .color(castColor(cast).opacity(0.18)),
+                          style: StrokeStyle(lineWidth: 0.8, dash: [4, 6]))
+            context.draw(
+                Text(cast.role.displayName.capitalized)
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                    .foregroundColor(castColor(cast).opacity(0.75)),
+                at: CGPoint(x: 24, y: y),
+                anchor: .leading
+            )
+        }
+    }
+
+    // MARK: - Cast figures
+
+    private func drawCastFigures(
+        in context: inout GraphicsContext, size: CGSize, t: Double
+    ) {
+        for cast in Ch01Cast.allCases {
+            let pos = castPosition(cast: cast, size: size)
+            let r: CGFloat = 26
+            let color = castColor(cast)
+            let haloR = r * 1.5
+            context.fill(
+                Circle().path(in: CGRect(x: pos.x - haloR, y: pos.y - haloR,
+                                          width: haloR * 2, height: haloR * 2)),
+                with: .color(color.opacity(0.10))
+            )
+            context.fill(
+                Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r,
+                                          width: r * 2, height: r * 2)),
+                with: .color(color.opacity(0.95))
+            )
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r,
+                                          width: r * 2, height: r * 2)),
+                with: .color(.white.opacity(0.5)), lineWidth: 1.5
+            )
+            context.draw(
+                Text(String(cast.role.displayName.prefix(1)))
+                    .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.white),
+                at: pos
+            )
+            context.draw(
+                Text(cast.role.displayName.uppercased())
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(color.opacity(0.95)),
+                at: CGPoint(x: pos.x, y: pos.y + r + 12)
+            )
+        }
+    }
+
+    // MARK: - Accepted (carry-forward) vertices on each lane
+
+    private func drawAcceptedVertices(
+        in context: inout GraphicsContext, size: CGSize, world: Ch09WorldState
+    ) {
+        let casts: [(Ch01Cast, Int)] = [(.aaron, 0), (.ben, 1), (.carl, 2), (.dave, 3)]
+        for (cast, laneIdx) in casts {
+            let lane = castLaneY(laneIdx, size: size)
+            let castX = castPosition(cast: cast, size: size).x
+            let firstX = castX + 70
+            let gap: CGFloat = 56
+            for (i, mid) in Self.initialMessages.enumerated() {
+                let x = firstX + CGFloat(i) * gap
+                if x > size.width - 60 { break }
+                drawAcceptedVertex(in: &context,
+                                    at: CGPoint(x: x, y: lane),
+                                    messageId: mid)
+            }
+        }
+    }
+
+    private func drawAcceptedVertex(
+        in context: inout GraphicsContext, at pos: CGPoint,
+        messageId: String
+    ) {
+        let r: CGFloat = 13
+        let color = castColor(authorOf(messageId))
+        let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
+        context.fill(Circle().path(in: rect),
+                    with: .color(color.opacity(0.85)))
+        context.stroke(Circle().path(in: rect),
+                      with: .color(.white.opacity(0.55)), lineWidth: 1.0)
+        context.draw(
+            Text(messageId)
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white),
+            at: pos
+        )
+    }
+
+    // MARK: - Dave's forks
+
+    private func drawDaveForks(
+        in context: inout GraphicsContext, size: CGSize,
+        world: Ch09WorldState, t: Double
+    ) {
+        let lane = castLaneY(3, size: size)
+        let castX = castPosition(cast: .dave, size: size).x
+        // Forks sit at the right end of Dave's accepted-vertex row,
+        // visually past ε.
+        let baseX = castX + 70 + CGFloat(Self.initialMessages.count) * 56
+        let forkGap: CGFloat = 56
+
+        for (i, vid) in world.forksOnDaveLane.enumerated() {
+            let pos = CGPoint(x: baseX + CGFloat(i) * forkGap, y: lane)
+            let r: CGFloat = 16
+            let pulse: CGFloat = world.daveBanned ? 1.0 : 1.0 + 0.05 * CGFloat(sin(t * 4))
+            let rr = r * pulse
+
+            // Outer red fork ring
+            let ringR: CGFloat = rr + 4
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - ringR, y: pos.y - ringR,
+                                          width: ringR * 2, height: ringR * 2)),
+                with: .color(.red.opacity(0.85)), lineWidth: 2.4
+            )
+            // Inner Dave-violet fill
+            context.fill(
+                Circle().path(in: CGRect(x: pos.x - rr, y: pos.y - rr,
+                                          width: rr * 2, height: rr * 2)),
+                with: .color(Cast.violet.opacity(world.daveBanned ? 0.45 : 0.95))
+            )
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - rr, y: pos.y - rr,
+                                          width: rr * 2, height: rr * 2)),
+                with: .color(.white.opacity(0.55)), lineWidth: 1.2
+            )
+            context.draw(
+                Text(vid)
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.white.opacity(world.daveBanned ? 0.6 : 1.0)),
+                at: pos
+            )
+            context.draw(
+                Text(hashOf(vid))
+                    .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5)),
+                at: CGPoint(x: pos.x, y: pos.y + rr + 8)
+            )
+            // Big red X if Dave is banned
+            if world.daveBanned {
+                let xr: CGFloat = ringR + 2
+                var xPath = Path()
+                xPath.move(to: CGPoint(x: pos.x - xr, y: pos.y - xr))
+                xPath.addLine(to: CGPoint(x: pos.x + xr, y: pos.y + xr))
+                xPath.move(to: CGPoint(x: pos.x - xr, y: pos.y + xr))
+                xPath.addLine(to: CGPoint(x: pos.x + xr, y: pos.y - xr))
+                context.stroke(xPath,
+                              with: .color(.red.opacity(0.95)), lineWidth: 3.0)
+            }
+        }
+    }
+
+    // MARK: - Thought / composing / flight
+
+    private func drawThoughtBubble(
+        in context: inout GraphicsContext, size: CGSize,
+        thought: Ch09WorldState.Ch09Thought
+    ) {
+        let pos = castPosition(cast: thought.cast, size: size)
+        let bubbleW: CGFloat = max(140, CGFloat(thought.label.count) * 7 + 24)
+        let bubbleH: CGFloat = 36
+        let bubbleRect = CGRect(
+            x: pos.x - bubbleW / 2,
+            y: pos.y - 80 - bubbleH,
+            width: bubbleW, height: bubbleH
+        )
+        let color = castColor(thought.cast)
+        context.fill(RoundedRectangle(cornerRadius: 18).path(in: bubbleRect),
+                    with: .color(.black.opacity(0.78)))
+        context.stroke(RoundedRectangle(cornerRadius: 18).path(in: bubbleRect),
+                      with: .color(color.opacity(0.85)), lineWidth: 1.4)
+        context.draw(
+            Text(thought.label)
+                .font(.system(size: settings.scaled(11), weight: .medium, design: .default))
+                .foregroundColor(.white.opacity(0.92))
+                .italic(),
+            at: CGPoint(x: bubbleRect.midX, y: bubbleRect.midY)
+        )
+    }
+
+    private func drawComposingSlot(
+        in context: inout GraphicsContext, size: CGSize,
+        composing: Ch09WorldState.Ch09Composing
+    ) {
+        guard let info = Ch09Timeline.forkVersions[composing.versionId] else { return }
+        let authorPos = castPosition(cast: .dave, size: size)
+        let boxW: CGFloat = min(540, size.width - 80)
+        let boxRect = CGRect(x: size.width / 2 - boxW / 2, y: 16,
+                             width: boxW, height: 110)
+        var connector = Path()
+        connector.move(to: CGPoint(x: boxRect.midX, y: boxRect.maxY))
+        connector.addLine(to: CGPoint(x: authorPos.x, y: authorPos.y - 36))
+        context.stroke(connector,
+                      with: .color(Cast.violet.opacity(0.45)),
+                      style: StrokeStyle(lineWidth: 1.4, dash: [3, 4]))
+        context.fill(RoundedRectangle(cornerRadius: 10).path(in: boxRect),
+                    with: .color(.black.opacity(0.88)))
+        // Red ring on the box to flag this is a fork
+        context.stroke(RoundedRectangle(cornerRadius: 10).path(in: boxRect),
+                      with: .color(.red.opacity(0.95)), lineWidth: 1.8)
+        context.draw(
+            Text("✎ DAVE WRITING \(info.label)  (FORK)")
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                .foregroundColor(.red.opacity(0.95)),
+            at: CGPoint(x: boxRect.minX + 14, y: boxRect.minY + 14),
+            anchor: .leading
+        )
+        context.draw(
+            Text(info.claim)
+                .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.88)),
+            at: CGPoint(x: boxRect.minX + 14, y: boxRect.minY + 36),
+            anchor: .leading
+        )
+        context.draw(
+            Text("parents: ε")
+                .font(.system(size: settings.scaled(11), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.88)),
+            at: CGPoint(x: boxRect.minX + 14, y: boxRect.minY + 54),
+            anchor: .leading
+        )
+        if composing.sealed {
+            context.draw(
+                Text("hash:    \(info.hashShort)…  ✓")
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                    .foregroundColor(Cast.violet.opacity(0.95)),
+                at: CGPoint(x: boxRect.minX + 14, y: boxRect.minY + 72),
+                anchor: .leading
+            )
+        }
+    }
+
+    private func drawForkFlight(
+        in context: inout GraphicsContext, size: CGSize,
+        flight: Ch09WorldState.Ch09Flight
+    ) {
+        let lift: CGFloat = 36
+        let from = castPosition(cast: flight.from, size: size)
+        let to = castPosition(cast: flight.to, size: size)
+        let fromTrack = CGPoint(x: from.x, y: from.y - lift)
+        let toTrack = CGPoint(x: to.x, y: to.y - lift)
+        var path = Path()
+        path.move(to: fromTrack)
+        path.addLine(to: toTrack)
+        context.stroke(path,
+                      with: .color(.red.opacity(0.25)),
+                      style: StrokeStyle(lineWidth: 1.0, dash: [3, 5]))
+        let p = CGFloat(flight.progress)
+        let pos = CGPoint(x: fromTrack.x + (toTrack.x - fromTrack.x) * p,
+                          y: fromTrack.y + (toTrack.y - fromTrack.y) * p)
+        let envW: CGFloat = 80
+        let envH: CGFloat = 30
+        let rect = CGRect(x: pos.x - envW / 2, y: pos.y - envH / 2,
+                          width: envW, height: envH)
+        context.fill(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                    with: .color(Cast.violet.opacity(0.95)))
+        context.stroke(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                      with: .color(.red.opacity(0.85)), lineWidth: 1.4)
+        context.draw(
+            Text("\(flight.versionId) · \(hashOf(flight.versionId))")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white),
+            at: pos
+        )
+    }
+
+    // MARK: - Fork detected / threshold / converged
+
+    private func drawForkDetected(
+        in context: inout GraphicsContext, size: CGSize, alpha: Double
+    ) {
+        let cy: CGFloat = 60
+        let label = "⚠ FORK DETECTED — same Dave identity, two different bodies"
+        context.draw(
+            Text(label)
+                .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
+                .foregroundColor(.red.opacity(0.95 * alpha)),
+            at: CGPoint(x: size.width / 2, y: cy)
+        )
+    }
+
+    private func drawThresholdBar(
+        in context: inout GraphicsContext, size: CGSize, alpha: Double
+    ) {
+        // f<n/3 visual: a small bar showing 1 byzantine / 4 total.
+        let cy: CGFloat = 92
+        let barW: CGFloat = 280
+        let barH: CGFloat = 18
+        let barX = size.width / 2 - barW / 2
+        let rect = CGRect(x: barX, y: cy - barH / 2, width: barW, height: barH)
+        context.stroke(RoundedRectangle(cornerRadius: 4).path(in: rect),
+                      with: .color(.white.opacity(0.45 * alpha)), lineWidth: 1.0)
+        // Threshold: 1/3 of bar marked at 33% line
+        let threshFrac = CGFloat(1.0 / 3.0)
+        let threshX = barX + threshFrac * barW
+        var threshLine = Path()
+        threshLine.move(to: CGPoint(x: threshX, y: rect.minY - 4))
+        threshLine.addLine(to: CGPoint(x: threshX, y: rect.maxY + 4))
+        context.stroke(threshLine,
+                      with: .color(.yellow.opacity(0.85 * alpha)),
+                      style: StrokeStyle(lineWidth: 1.4, dash: [3, 3]))
+        // Filled portion: 1/4 = 25% (one byzantine of four)
+        let fillFrac = CGFloat(1.0 / 4.0)
+        let fillRect = CGRect(x: barX, y: rect.minY,
+                              width: fillFrac * barW, height: barH)
+        context.fill(RoundedRectangle(cornerRadius: 4).path(in: fillRect),
+                    with: .color(.green.opacity(0.7 * alpha)))
+        context.draw(
+            Text("f = 1, n = 4   ·   3f = 3 < n = 4   ·   safety holds")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white.opacity(0.9 * alpha)),
+            at: CGPoint(x: rect.midX, y: rect.maxY + 14)
+        )
+    }
+
+    private func drawConvergedBadge(
+        in context: inout GraphicsContext, size: CGSize, alpha: Double
+    ) {
+        context.draw(
+            Text("✓ AARON · BEN · CARL CONVERGE — Dave's weight wasted")
+                .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
+                .foregroundColor(.green.opacity(0.95 * alpha)),
+            at: CGPoint(x: size.width / 2, y: size.height - 50)
+        )
+    }
+
+    // MARK: - Perception towers
+
+    private func drawPerceptionTowers(
+        in context: inout GraphicsContext, size: CGSize, world: Ch09WorldState
+    ) {
+        let casts: [Ch01Cast] = [.aaron, .ben, .carl, .dave]
+        let blockH: CGFloat = 18
+        let blockGap: CGFloat = 3
+        let maxBlocks = 7   // up to 5 honest + 2 fork versions
+        let towerH: CGFloat = CGFloat(maxBlocks) * (blockH + blockGap) + 28
+        let baseY: CGFloat = size.height - 70
+        let towerW: CGFloat = 110
+        let totalW = CGFloat(casts.count) * towerW + CGFloat(casts.count - 1) * 24
+        let startX = (size.width - totalW) / 2
+
+        for (i, cast) in casts.enumerated() {
+            let towerX = startX + CGFloat(i) * (towerW + 24)
+            let towerCenter = towerX + towerW / 2
+            let color = castColor(cast)
+
+            context.draw(
+                Text(cast.role.displayName.uppercased())
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(color.opacity(0.85)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 4)
+            )
+            context.draw(
+                Text("VIEW")
+                    .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.35)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 18)
+            )
+            var baseline = Path()
+            baseline.move(to: CGPoint(x: towerX, y: baseY))
+            baseline.addLine(to: CGPoint(x: towerX + towerW, y: baseY))
+            context.stroke(baseline, with: .color(color.opacity(0.45)),
+                          lineWidth: 1.2)
+            for railX in [towerX, towerX + towerW] {
+                var rail = Path()
+                rail.move(to: CGPoint(x: railX, y: baseY))
+                rail.addLine(to: CGPoint(x: railX, y: baseY - towerH + 26))
+                context.stroke(rail, with: .color(color.opacity(0.18)),
+                              style: StrokeStyle(lineWidth: 0.8, dash: [3, 4]))
+            }
+            let order = world.views[cast] ?? []
+            for (j, mid) in order.enumerated() {
+                let blockY = baseY - CGFloat(j + 1) * (blockH + blockGap)
+                let rect = CGRect(x: towerX + 6, y: blockY,
+                                  width: towerW - 12, height: blockH)
+                let isFork = mid.hasPrefix("ζ")
+                let blockColor = castColor(authorOf(mid))
+                context.fill(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                            with: .color(blockColor.opacity(world.daveBanned && isFork ? 0.30 : 0.88)))
+                context.stroke(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                              with: .color(isFork ? .red.opacity(0.85) : .white.opacity(0.45)),
+                              lineWidth: isFork ? 1.6 : 1.0)
+                context.draw(
+                    Text(mid)
+                        .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white.opacity(world.daveBanned && isFork ? 0.55 : 1.0)),
+                    at: CGPoint(x: rect.midX, y: rect.midY)
+                )
+                if world.daveBanned && isFork {
+                    var x = Path()
+                    x.move(to: CGPoint(x: rect.minX + 4, y: rect.minY + 4))
+                    x.addLine(to: CGPoint(x: rect.maxX - 4, y: rect.maxY - 4))
+                    x.move(to: CGPoint(x: rect.minX + 4, y: rect.maxY - 4))
+                    x.addLine(to: CGPoint(x: rect.maxX - 4, y: rect.minY + 4))
+                    context.stroke(x, with: .color(.red.opacity(0.9)),
+                                  lineWidth: 1.5)
                 }
             }
-            if vertex.isLast && !isForked && sceneIndex == 1 {
-                context.stroke(Circle().path(in: rect.insetBy(dx: -2, dy: -2)),
-                              with: .color(.green.opacity(0.6)), lineWidth: 1.6)
-            }
         }
-
-        // ─── Scene-specific bottom panel ─────────────────────────────────
-        switch sceneIndex {
-        case 0:
-            renderScene0Bottom(in: &context, size: size, time: time,
-                               forkedCount: forkedVertices.count, daveTotal: daveVertices.count)
-        case 1:
-            renderScene1Bottom(in: &context, size: size, time: time, sim: sim,
-                               forkedCount: forkedVertices.count)
-        default: break
-        }
-
-        // Top header reads the same in both scenes — anchors the chapter.
-        context.draw(
-            Text("DAVE LIES — CRISIS CATCHES HIM")
-                .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
-                .foregroundColor(.red.opacity(0.55))
-                .kerning(2),
-            at: CGPoint(x: size.width / 2, y: 28)
-        )
     }
 
-    // MARK: - Scene 0: forks revealed
+    // MARK: - Beat tag
 
-    private func renderScene0Bottom(
-        in context: inout GraphicsContext, size: CGSize, time: Double,
-        forkedCount: Int, daveTotal: Int
+    private func drawBeatTag(
+        in context: inout GraphicsContext, size: CGSize, world: Ch09WorldState
     ) {
-        let bandY = size.height * 0.7
-        let appear = min(1.0, time * 0.4)
-
+        guard let beatId = world.activeBeat?.id else { return }
         context.draw(
-            Text("DAVE'S FORKS — VIOLET LANE, RED RINGS")
-                .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
-                .foregroundColor(.red.opacity(0.7 * appear)),
-            at: CGPoint(x: size.width / 2, y: bandY)
-        )
-
-        // Stats row
-        let stats: [(String, String, Color)] = [
-            ("DAVE TOTAL", "\(daveTotal) MSGS", Cast.violet),
-            ("CONFLICTS",  "\(forkedCount)",     .red),
-            ("STRATEGY",   "FORK SAME ID, DIFFERENT PARENTS", .orange)
-        ]
-        let pillW: CGFloat = 220
-        let pillH: CGFloat = 46
-        let totalW = pillW * CGFloat(stats.count) + 24 * CGFloat(stats.count - 1)
-        let startX = (size.width - totalW) / 2
-        for (i, stat) in stats.enumerated() {
-            let appearI = max(0, min(1, time * 0.4 - Double(i) * 0.5))
-            if appearI < 0.05 { continue }
-            let x = startX + CGFloat(i) * (pillW + 24)
-            let rect = CGRect(x: x, y: bandY + 26, width: pillW, height: pillH)
-            context.fill(RoundedRectangle(cornerRadius: 8).path(in: rect),
-                        with: .color(.black.opacity(0.55 * appearI)))
-            context.stroke(RoundedRectangle(cornerRadius: 8).path(in: rect),
-                          with: .color(stat.2.opacity(0.7 * appearI)),
-                          lineWidth: 1.5)
-            context.draw(
-                Text(stat.0)
-                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
-                    .foregroundColor(stat.2.opacity(0.95 * appearI)),
-                at: CGPoint(x: rect.midX, y: rect.minY + 14)
-            )
-            context.draw(
-                Text(stat.1)
-                    .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.95 * appearI)),
-                at: CGPoint(x: rect.midX, y: rect.minY + 32)
-            )
-        }
-
-        let hintAppear = max(0, min(1, time * 0.3 - 1.5))
-        context.draw(
-            Text("EACH FORKED VERTEX SHARES DAVE'S ID BUT POINTS AT DIFFERENT PARENTS — TRYING TO TRICK AARON & BEN INTO DISAGREEING")
-                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.55 * hintAppear)),
-            at: CGPoint(x: size.width / 2, y: size.height - 36)
-        )
-    }
-
-    // MARK: - Scene 1: protocol routes around
-
-    private func renderScene1Bottom(
-        in context: inout GraphicsContext, size: CGSize, time: Double,
-        sim: SimulationData, forkedCount: Int
-    ) {
-        let bandY = size.height * 0.7
-
-        // Threshold bar.
-        let n = sim.nodes.count
-        let f = sim.nodes.filter { $0.isByzantine }.count
-        let appear = min(1.0, time * 0.3)
-
-        context.draw(
-            Text("BYZANTINE RESILIENCE  —  f < n/3")
-                .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
-                .foregroundColor(.green.opacity(0.7 * appear))
-                .kerning(1.5),
-            at: CGPoint(x: size.width / 2, y: bandY)
-        )
-
-        let barW: CGFloat = size.width * 0.55
-        let barH: CGFloat = 14
-        let barX = (size.width - barW) / 2
-        let barY = bandY + 32
-
-        // Track
-        let bgRect = CGRect(x: barX, y: barY, width: barW, height: barH)
-        context.fill(RoundedRectangle(cornerRadius: 7).path(in: bgRect),
-                    with: .color(.white.opacity(0.06 * appear)))
-
-        // Byzantine fill.
-        let byzFrac = Double(f) / Double(n)
-        let fillRect = CGRect(x: barX, y: barY, width: barW * byzFrac, height: barH)
-        context.fill(RoundedRectangle(cornerRadius: 7).path(in: fillRect),
-                    with: .color(.red.opacity(0.55 * appear)))
-
-        // Threshold marker at 1/3.
-        let threshX = barX + barW * (1.0 / 3.0)
-        var threshLine = Path()
-        threshLine.move(to: CGPoint(x: threshX, y: barY - 5))
-        threshLine.addLine(to: CGPoint(x: threshX, y: barY + barH + 5))
-        context.stroke(threshLine, with: .color(.green.opacity(0.85 * appear)), lineWidth: 2.5)
-        context.draw(
-            Text("1/3 THRESHOLD")
-                .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
-                .foregroundColor(.green.opacity(0.7 * appear)),
-            at: CGPoint(x: threshX, y: barY + barH + 16)
-        )
-
-        context.draw(
-            Text("\(f)/\(n) BYZANTINE  =  \(String(format: "%.1f", byzFrac * 100))%")
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85 * appear)),
-            at: CGPoint(x: barX + barW / 2, y: barY - 14)
-        )
-
-        // Defense line.
-        let defenseAppear = max(0, min(1, time * 0.3 - 1.5))
-        context.draw(
-            Text("✓ \(forkedCount) FORKS DETECTED  ·  ✓ DAVE'S VERTICES BANNED  ·  ✓ AARON·BEN·CARL CONVERGE")
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(.green.opacity(0.7 * defenseAppear)),
-            at: CGPoint(x: size.width / 2, y: barY + barH + 44)
-        )
-
-        let footerAppear = max(0, min(1, time * 0.3 - 2.5))
-        context.draw(
-            Text("CRISIS GUARANTEES TOTAL ORDER WHENEVER FEWER THAN ONE-THIRD OF VALIDATORS LIE.")
-                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.55 * footerAppear)),
-            at: CGPoint(x: size.width / 2, y: size.height - 36)
+            Text(beatId)
+                .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.20)),
+            at: CGPoint(x: size.width - 14, y: 10),
+            anchor: .trailing
         )
     }
 }
