@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Ch08: "Data Availability — The Problem" — 4 scenes: gossip≠storage, bootstrapping, sybil, separation.
+/// Ch07 (chapter index 7, file Ch08_DA_Problem.swift):
+/// "The leader knows. Did the leader tell anyone?" — DA problem.
 struct Ch08_DA_Problem: View {
     let sceneIndex: Int
     let localTime: Double
@@ -8,509 +9,363 @@ struct Ch08_DA_Problem: View {
     let dm: DataManager
     @Environment(AppSettings.self) private var settings
 
-    /// Synthetic 8-node ring topology: cast colors first, then a few muted
-    /// peer tones so the chapter visually carries over from the cast scenes.
-    /// Avoids the legacy `DataManager.palette[i]` rainbow that broke cast
-    /// continuity here.
-    private static let castPalette: [Color] = [
-        Cast.coral, Cast.teal, Cast.amber, Cast.violet,
-        Cast.muted, Cast.muted.opacity(0.85),
-        Cast.muted.opacity(0.7), Cast.muted.opacity(0.55)
-    ]
-
     var body: some View {
         Canvas { context, size in
-            render(context: &context, size: size, time: localTime)
+            let t = Ch07Scenes.timelineT(sceneIndex: sceneIndex,
+                                          localTime: localTime)
+            render(in: &context, size: size, t: t)
         }
     }
 
-    private func render(context: inout GraphicsContext, size: CGSize, time: Double) {
-        switch sceneIndex {
-        case 0: renderGossipNotStorage(context: &context, size: size, time: time)
-        case 1: renderBootstrapping(context: &context, size: size, time: time)
-        case 2: renderSybilAttack(context: &context, size: size, time: time)
-        case 3: renderSeparation(context: &context, size: size, time: time)
-        default: break
+    private func render(in context: inout GraphicsContext, size: CGSize, t: Double) {
+        let world = Ch07Timeline.state(at: t)
+        drawLanes(in: &context, size: size)
+        drawCastFigures(in: &context, size: size)
+        drawAcceptedVertices(in: &context, size: size, world: world)
+        drawAaronVault(in: &context, size: size, world: world, t: t)
+        if let flight = world.hashFlight {
+            drawHashFlight(in: &context, size: size, flight: flight)
+        }
+        if let ask = world.askArrow {
+            drawAskArrow(in: &context, size: size, ask: ask)
+        }
+        if let asker = world.timeoutFlash {
+            drawTimeoutFlash(in: &context, size: size, asker: asker, t: t)
+        }
+        if world.stuckAlpha > 0 {
+            drawStuckBadge(in: &context, size: size, alpha: world.stuckAlpha)
+        }
+        drawBeatTag(in: &context, size: size, world: world)
+    }
+
+    private func castLaneY(_ laneIdx: Int, size: CGSize) -> CGFloat {
+        let margin: CGFloat = 60
+        let nodeCount: CGFloat = 7
+        let laneHeight = (size.height - 2 * margin) / nodeCount
+        return margin + (CGFloat(laneIdx) + 0.5) * laneHeight
+    }
+
+    private func castPosition(cast: Ch01Cast, size: CGSize) -> CGPoint {
+        let laneIdx: Int
+        switch cast {
+        case .aaron: laneIdx = 0
+        case .ben:   laneIdx = 1
+        case .carl:  laneIdx = 2
+        case .dave:  laneIdx = 3
+        }
+        return CGPoint(x: size.width * 0.18, y: castLaneY(laneIdx, size: size))
+    }
+
+    private func castColor(_ cast: Ch01Cast) -> Color {
+        switch cast {
+        case .aaron: return Cast.coral
+        case .ben:   return Cast.teal
+        case .carl:  return Cast.amber
+        case .dave:  return Cast.violet
         }
     }
 
-    // MARK: - Scene 0: Gossip ≠ Storage
-
-    private func renderGossipNotStorage(context: inout GraphicsContext, size: CGSize, time: Double) {
-        let cx = size.width / 2
-        let cy = size.height / 2
-        let nodeCount = 8
-        let radius: CGFloat = min(size.width, size.height) * 0.25
-
-        // Draw nodes
-        var positions: [CGPoint] = []
-        for i in 0..<nodeCount {
-            let angle = Double(i) * (2.0 * .pi / Double(nodeCount)) - .pi / 2.0
-            let pos = CGPoint(x: cx + radius * cos(angle), y: cy + radius * sin(angle))
-            positions.append(pos)
-
-            let r: CGFloat = 18
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            let color = Self.castPalette[i % Self.castPalette.count]
-            context.fill(Circle().path(in: rect), with: .color(color.opacity(0.7)))
-        }
-
-        // Animated outward pulses (push-based gossip)
-        for i in 0..<nodeCount {
-            let pos = positions[i]
-            for wave in 0..<3 {
-                let phase = (time * 0.6 + Double(i) * 0.3 + Double(wave) * 0.4).truncatingRemainder(dividingBy: 1.5)
-                let pulseR = 18 + 80 * phase
-                let alpha = max(0, 0.25 - 0.2 * phase)
-                if alpha > 0.01 {
-                    let pulseRect = CGRect(x: pos.x - pulseR, y: pos.y - pulseR,
-                                            width: pulseR * 2, height: pulseR * 2)
-                    let color = Self.castPalette[i % Self.castPalette.count]
-                    context.stroke(Circle().path(in: pulseRect),
-                                  with: .color(color.opacity(alpha)), lineWidth: 1)
-                }
-            }
-        }
-
-        // Gossip particles between nodes
-        for p in 0..<30 {
-            let seed = Double(p * 7919)
-            let fromIdx = Int(seed) % nodeCount
-            let toIdx = (fromIdx + 1 + Int(seed * 0.3) % (nodeCount - 1)) % nodeCount
-            let progress = ((time * 0.5 + seed * 0.05).truncatingRemainder(dividingBy: 1.0))
-
-            let from = positions[fromIdx]
-            let to = positions[toIdx]
-            let px = from.x + (to.x - from.x) * progress
-            let py = from.y + (to.y - from.y) * progress
-            let particleR: CGFloat = 2.5
-            let particleRect = CGRect(x: px - particleR, y: py - particleR,
-                                       width: particleR * 2, height: particleR * 2)
-            let color = Self.castPalette[fromIdx % Self.castPalette.count]
-            context.fill(Circle().path(in: particleRect), with: .color(color.opacity(0.4 * (1 - progress))))
-        }
-
-        // Labels
-        context.draw(
-            Text("PUSH-BASED GOSSIP")
-                .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.3)),
-            at: CGPoint(x: cx, y: 50)
-        )
-
-        // Bottom: NOT vs IS
-        let boxW: CGFloat = 250
-        let boxH: CGFloat = 50
-        let leftBox = CGRect(x: cx - boxW - 20, y: size.height - 100, width: boxW, height: boxH)
-        context.fill(RoundedRectangle(cornerRadius: 8).path(in: leftBox),
-                    with: .color(.green.opacity(0.1)))
-        context.stroke(RoundedRectangle(cornerRadius: 8).path(in: leftBox),
-                      with: .color(.green.opacity(0.3)), lineWidth: 1)
-        context.draw(
-            Text("✓ FIREHOSE FOR THE PRESENT")
-                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
-                .foregroundColor(.green.opacity(0.7)),
-            at: CGPoint(x: leftBox.midX, y: leftBox.midY)
-        )
-
-        let rightBox = CGRect(x: cx + 20, y: size.height - 100, width: boxW, height: boxH)
-        context.fill(RoundedRectangle(cornerRadius: 8).path(in: rightBox),
-                    with: .color(.red.opacity(0.1)))
-        context.stroke(RoundedRectangle(cornerRadius: 8).path(in: rightBox),
-                      with: .color(.red.opacity(0.3)), lineWidth: 1)
-        context.draw(
-            Text("✕ NOT A DATABASE FOR THE PAST")
-                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
-                .foregroundColor(.red.opacity(0.7)),
-            at: CGPoint(x: rightBox.midX, y: rightBox.midY)
-        )
+    private func authorOf(_ mid: String) -> Ch01Cast {
+        if mid == "ξ" { return .aaron }
+        if let m = Ch01Timeline.messages[mid] { return m.author }
+        if let m = Ch02Timeline.messages[mid] { return m.author }
+        return .aaron
     }
 
-    // MARK: - Scene 1: Bootstrapping Problem
+    private static let initialMessages: [String] = ["α", "β", "γ", "δ", "ε"]
+    private static let castLanes: [(Ch01Cast, Int)] = [(.aaron, 0), (.ben, 1), (.carl, 2), (.dave, 3)]
 
-    private func renderBootstrapping(context: inout GraphicsContext, size: CGSize, time: Double) {
-        let cx = size.width / 2
-        let cy = size.height * 0.48
-
-        // Existing network (left cluster) — 8 real nodes
-        let netRadius: CGFloat = min(size.width, size.height) * 0.18
-        let netCenter = CGPoint(x: cx * 0.45, y: cy)
-        var netPositions: [CGPoint] = []
-        let nodeCount = 8
-        let stress = min(1.0, time * 0.1)
-
-        // Draw inter-node connections first
-        for i in 0..<nodeCount {
-            let angle = Double(i) * (2.0 * .pi / Double(nodeCount)) - .pi / 2
-            let pos = CGPoint(x: netCenter.x + netRadius * cos(angle),
-                               y: netCenter.y + netRadius * sin(angle))
-            netPositions.append(pos)
+    /// X position for ξ on a lane — it sits past ε, in the rightmost slot.
+    private func xiPosition(cast: Ch01Cast, size: CGSize) -> CGPoint {
+        let laneIdx: Int
+        switch cast {
+        case .aaron: laneIdx = 0
+        case .ben:   laneIdx = 1
+        case .carl:  laneIdx = 2
+        case .dave:  laneIdx = 3
         }
-        for i in 0..<nodeCount {
-            for j in (i+1)..<nodeCount {
-                if (i + j) % 3 != 0 { continue } // sparse connections
-                var edge = Path()
-                edge.move(to: netPositions[i])
-                edge.addLine(to: netPositions[j])
-                context.stroke(edge, with: .color(.white.opacity(0.04)), lineWidth: 0.5)
-            }
+        let lane = castLaneY(laneIdx, size: size)
+        let baseX = castPosition(cast: cast, size: size).x + 70
+        // 5 initial messages + ξ as #6
+        return CGPoint(x: baseX + 5 * 50, y: lane)
+    }
+
+    private func vertexPosition(cast: Ch01Cast, mid: String, size: CGSize) -> CGPoint? {
+        if mid == "ξ" { return xiPosition(cast: cast, size: size) }
+        guard let i = Self.initialMessages.firstIndex(of: mid) else { return nil }
+        let laneIdx: Int
+        switch cast {
+        case .aaron: laneIdx = 0
+        case .ben:   laneIdx = 1
+        case .carl:  laneIdx = 2
+        case .dave:  laneIdx = 3
         }
+        let lane = castLaneY(laneIdx, size: size)
+        let castX = castPosition(cast: cast, size: size).x
+        return CGPoint(x: castX + 70 + CGFloat(i) * 50, y: lane)
+    }
 
-        for i in 0..<nodeCount {
-            let pos = netPositions[i]
-            let color = Self.castPalette[i % Self.castPalette.count]
-            let stressColor = Color(red: 0.3 + 0.5 * stress, green: 0.7 * (1 - stress * 0.5), blue: 0.9 * (1 - stress))
-            let blendedColor = stress > 0.5 ? stressColor : color
-            let r: CGFloat = 18
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            context.fill(Circle().path(in: rect), with: .color(blendedColor.opacity(0.7)))
+    // MARK: - Lanes / cast / vertices
 
-            // Node label
+    private func drawLanes(in context: inout GraphicsContext, size: CGSize) {
+        for (cast, idx) in Self.castLanes {
+            let y = castLaneY(idx, size: size)
+            var path = Path()
+            path.move(to: CGPoint(x: 36, y: y))
+            path.addLine(to: CGPoint(x: size.width - 200, y: y))  // leave room for vault
+            context.stroke(path, with: .color(castColor(cast).opacity(0.18)),
+                          style: StrokeStyle(lineWidth: 0.8, dash: [4, 6]))
             context.draw(
-                Text("N\(i)")
-                    .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.6)),
+                Text(cast.role.displayName.capitalized)
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                    .foregroundColor(castColor(cast).opacity(0.75)),
+                at: CGPoint(x: 24, y: y), anchor: .leading
+            )
+        }
+    }
+
+    private func drawCastFigures(in context: inout GraphicsContext, size: CGSize) {
+        for cast in Ch01Cast.allCases {
+            let pos = castPosition(cast: cast, size: size)
+            let r: CGFloat = 22
+            let color = castColor(cast)
+            context.fill(
+                Circle().path(in: CGRect(x: pos.x - r * 1.5, y: pos.y - r * 1.5,
+                                          width: r * 3, height: r * 3)),
+                with: .color(color.opacity(0.10))
+            )
+            context.fill(
+                Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r,
+                                          width: r * 2, height: r * 2)),
+                with: .color(color.opacity(0.95))
+            )
+            context.draw(
+                Text(String(cast.role.displayName.prefix(1)))
+                    .font(.system(size: settings.scaled(15), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.white),
                 at: pos
             )
+        }
+    }
 
-            // Stress radiating lines that grow with time
-            if stress > 0.3 {
-                for s in 0..<4 {
-                    let sAngle = Double(s) * (.pi / 2.0) + time * 0.5 + Double(i) * 0.4
-                    let sLen: CGFloat = 8 + 18 * stress
-                    var stressLine = Path()
-                    stressLine.move(to: CGPoint(x: pos.x + r * cos(sAngle), y: pos.y + r * sin(sAngle)))
-                    stressLine.addLine(to: CGPoint(x: pos.x + (r + sLen) * cos(sAngle),
-                                                     y: pos.y + (r + sLen) * sin(sAngle)))
-                    context.stroke(stressLine, with: .color(.red.opacity(0.35 * stress)), lineWidth: 1.5)
-                }
-            }
-
-            // Overload indicators (small "!" marks appearing with stress)
-            if stress > 0.6 {
-                let flash = 0.5 + 0.5 * sin(time * 5 + Double(i))
+    private func drawAcceptedVertices(
+        in context: inout GraphicsContext, size: CGSize, world: Ch07WorldState
+    ) {
+        for (cast, _) in Self.castLanes {
+            // Carry-forward α-ε on every lane
+            for mid in Self.initialMessages {
+                guard let pos = vertexPosition(cast: cast, mid: mid, size: size) else { continue }
+                let r: CGFloat = 11
+                let color = castColor(authorOf(mid))
+                let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
+                context.fill(Circle().path(in: rect), with: .color(color.opacity(0.85)))
                 context.draw(
-                    Text("!")
+                    Text(mid)
                         .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
-                        .foregroundColor(.red.opacity(0.6 * flash)),
-                    at: CGPoint(x: pos.x + r + 4, y: pos.y - r - 4)
+                        .foregroundColor(.white),
+                    at: pos
                 )
             }
-        }
-
-        // "EXISTING NETWORK" label
-        context.draw(
-            Text("EXISTING NETWORK")
-                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.25)),
-            at: CGPoint(x: netCenter.x, y: netCenter.y + netRadius + 36)
-        )
-
-        // Multiple new nodes joining (right side) — the problem scales
-        let joiners = min(5, Int(time * 0.4) + 1)
-        var newNodePositions: [CGPoint] = []
-        for j in 0..<joiners {
-            let yOffset = CGFloat(j - joiners / 2) * 80
-            let xStagger = CGFloat(j % 2) * 40
-            let newPos = CGPoint(x: size.width * 0.78 + xStagger, y: cy + yOffset)
-            newNodePositions.append(newPos)
-
-            let newR: CGFloat = 24
-            let pulse = 0.7 + 0.3 * sin(time * 3 + Double(j))
-            let newRect = CGRect(x: newPos.x - newR, y: newPos.y - newR, width: newR * 2, height: newR * 2)
-            context.fill(Circle().path(in: newRect), with: .color(.yellow.opacity(0.75 * pulse)))
-            context.stroke(Circle().path(in: newRect.insetBy(dx: -2, dy: -2)),
-                          with: .color(.yellow.opacity(0.3)), lineWidth: 1)
-            context.draw(
-                Text("NEW")
-                    .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
-                    .foregroundColor(.black.opacity(0.8)),
-                at: newPos
-            )
-        }
-
-        // "JOINERS" label
-        context.draw(
-            Text("\(joiners) JOINER\(joiners > 1 ? "S" : "")")
-                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
-                .foregroundColor(.yellow.opacity(0.4)),
-            at: CGPoint(x: size.width * 0.8, y: cy + CGFloat(joiners) * 40 + 30)
-        )
-
-        // Request flood — each joiner sends requests to every network node
-        for j in 0..<newNodePositions.count {
-            let newPos = newNodePositions[j]
-            let reqPerJoiner = Int(min(12, time * 1.5))
-            for r in 0..<reqPerJoiner {
-                let seed = Double(j * 997 + r * 3571)
-                let targetIdx = Int(seed) % nodeCount
-                let target = netPositions[targetIdx]
-                let progress = ((time * 0.35 + seed * 0.02).truncatingRemainder(dividingBy: 1.0))
-                let px = newPos.x + (target.x - newPos.x) * progress
-                let py = newPos.y + (target.y - newPos.y) * progress
-                let pRect = CGRect(x: px - 3, y: py - 3, width: 6, height: 6)
-                context.fill(RoundedRectangle(cornerRadius: 1).path(in: pRect),
-                            with: .color(.yellow.opacity(0.35 * (1 - progress))))
+            // ξ: only on lanes that have it (Aaron always once sealed; Ben/Carl after sendHashOnly)
+            let hasXi: Bool = (cast == .aaron && world.xiSealed)
+                || world.xiInView.contains(cast)
+            if hasXi {
+                let pos = xiPosition(cast: cast, size: size)
+                let r: CGFloat = 14
+                let color = Cast.coral  // Aaron is the author
+                let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
+                context.fill(Circle().path(in: rect),
+                            with: .color(color.opacity(0.85)))
+                context.stroke(Circle().path(in: rect),
+                              with: .color(.white.opacity(0.6)), lineWidth: 1.0)
+                context.draw(
+                    Text("ξ")
+                        .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white),
+                    at: pos
+                )
+                // ⚠ BODY MISSING flag
+                if world.bodyMissingAt.contains(cast) {
+                    context.draw(
+                        Text("⚠ BODY MISSING")
+                            .font(.system(size: settings.scaled(8), weight: .heavy, design: .monospaced))
+                            .foregroundColor(.red.opacity(0.95)),
+                        at: CGPoint(x: pos.x, y: pos.y - r - 10)
+                    )
+                }
             }
         }
-
-        // Center annotation: O(history) × joiners
-        let annotAppear = min(1.0, max(0, time * 0.15 - 0.3))
-        if annotAppear > 0 {
-            let annotBox = CGRect(x: cx - 130, y: size.height * 0.78, width: 260, height: 50)
-            context.fill(RoundedRectangle(cornerRadius: 8).path(in: annotBox),
-                        with: .color(.orange.opacity(0.06 * annotAppear)))
-            context.stroke(RoundedRectangle(cornerRadius: 8).path(in: annotBox),
-                          with: .color(.orange.opacity(0.25 * annotAppear)), lineWidth: 1)
-            context.draw(
-                Text("COST = O(HISTORY) × JOINERS")
-                    .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
-                    .foregroundColor(.orange.opacity(0.7 * annotAppear)),
-                at: CGPoint(x: annotBox.midX, y: annotBox.midY - 8)
-            )
-            context.draw(
-                Text("each joiner replays entire DAG via gossip")
-                    .font(.system(size: settings.scaled(9), weight: .medium, design: .monospaced))
-                    .foregroundColor(.orange.opacity(0.4 * annotAppear)),
-                at: CGPoint(x: annotBox.midX, y: annotBox.midY + 10)
-            )
-        }
-
-        // Bandwidth meter (full width at top)
-        let barX: CGFloat = 40
-        let barY: CGFloat = 40
-        let barW = size.width - 80
-        let barH: CGFloat = 22
-        let bgRect = CGRect(x: barX, y: barY, width: barW, height: barH)
-        context.fill(RoundedRectangle(cornerRadius: 4).path(in: bgRect),
-                    with: .color(.white.opacity(0.05)))
-        context.stroke(RoundedRectangle(cornerRadius: 4).path(in: bgRect),
-                      with: .color(.white.opacity(0.15)), lineWidth: 1)
-
-        let fillPct = min(1.0, time * 0.06 * Double(joiners))
-        let fillRect = CGRect(x: barX, y: barY, width: barW * fillPct, height: barH)
-        let barColor: Color = fillPct > 0.7 ? .red : fillPct > 0.4 ? .orange : .green
-        context.fill(RoundedRectangle(cornerRadius: 4).path(in: fillRect),
-                    with: .color(barColor.opacity(0.6)))
-
-        // Tick marks on bandwidth bar
-        for tick in stride(from: 0.25, through: 0.75, by: 0.25) {
-            let tickX = barX + barW * tick
-            var tickPath = Path()
-            tickPath.move(to: CGPoint(x: tickX, y: barY))
-            tickPath.addLine(to: CGPoint(x: tickX, y: barY + barH))
-            context.stroke(tickPath, with: .color(.white.opacity(0.1)), lineWidth: 0.5)
-        }
-
-        context.draw(
-            Text("NETWORK BANDWIDTH: \(Int(fillPct * 100))%")
-                .font(.system(size: settings.scaled(9), weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.5)),
-            at: CGPoint(x: cx, y: barY + barH + 14)
-        )
-
-        context.draw(
-            Text("THE BOOTSTRAPPING PROBLEM — GOSSIP DOESN'T SCALE FOR HISTORY REPLAY")
-                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
-                .foregroundColor(.orange.opacity(0.5)),
-            at: CGPoint(x: cx, y: size.height - 30)
-        )
     }
 
-    // MARK: - Scene 2: Sybil Attack
+    // MARK: - Aaron's vault (storage column on the right)
 
-    private func renderSybilAttack(context: inout GraphicsContext, size: CGSize, time: Double) {
-        let cx = size.width / 2
-        let cy = size.height / 2
+    private func drawAaronVault(
+        in context: inout GraphicsContext, size: CGSize,
+        world: Ch07WorldState, t: Double
+    ) {
+        // Vault sits in the right margin, vertically aligned roughly
+        // with Aaron's lane.
+        let vaultW: CGFloat = 160
+        let vaultH: CGFloat = 130
+        let vaultX = size.width - vaultW - 24
+        let vaultY = castLaneY(0, size: size) - vaultH / 2
+        let rect = CGRect(x: vaultX, y: vaultY, width: vaultW, height: vaultH)
 
-        // Honest nodes (left cluster)
-        let honestCenter = CGPoint(x: cx * 0.4, y: cy)
-        for i in 0..<8 {
-            let angle = Double(i) * (2.0 * .pi / 8.0)
-            let pos = CGPoint(x: honestCenter.x + 90 * cos(angle),
-                               y: honestCenter.y + 70 * sin(angle))
-            let r: CGFloat = 14
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            let color = Self.castPalette[i % Self.castPalette.count]
-            context.fill(Circle().path(in: rect), with: .color(color.opacity(0.7)))
-        }
-
-        // Sybil swarm (flooding in from the right)
-        let sybilCount = Int(min(200, time * 15))
-        for i in 0..<sybilCount {
-            let seed = Double(i * 4931)
-            let x = cx * 0.8 + (seed.truncatingRemainder(dividingBy: (size.width * 0.55)))
-            let y = 30 + (seed * 1.7).truncatingRemainder(dividingBy: (size.height - 60))
-
-            // Ghost-like appearance
-            let ghostPhase = (time * 0.5 + seed * 0.01).truncatingRemainder(dividingBy: 2.0)
-            let ghostAlpha = ghostPhase < 1.0 ? 0.15 + 0.1 * ghostPhase : 0.25 * (2.0 - ghostPhase)
-
-            let r: CGFloat = 4 + (seed.truncatingRemainder(dividingBy: 4))
-            let rect = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
-            context.fill(Circle().path(in: rect), with: .color(.red.opacity(ghostAlpha)))
-        }
-
-        // Request lines from sybils to honest nodes
-        let lineCount = Int(min(40, time * 3))
-        for i in 0..<lineCount {
-            let seed = Double(i * 7717)
-            let fromX = cx * 0.8 + (seed.truncatingRemainder(dividingBy: (size.width * 0.4)))
-            let fromY = 50 + (seed * 2.3).truncatingRemainder(dividingBy: (size.height - 100))
-            let toIdx = Int(seed) % 8
-            let toAngle = Double(toIdx) * (2.0 * .pi / 8.0)
-            let toPos = CGPoint(x: honestCenter.x + 90 * cos(toAngle),
-                                 y: honestCenter.y + 70 * sin(toAngle))
-
-            let progress = ((time * 0.3 + seed * 0.02).truncatingRemainder(dividingBy: 1.0))
-            var line = Path()
-            line.move(to: CGPoint(x: fromX, y: fromY))
-            line.addLine(to: CGPoint(
-                x: fromX + (toPos.x - fromX) * progress,
-                y: fromY + (toPos.y - fromY) * progress
-            ))
-            context.stroke(line, with: .color(.red.opacity(0.08)), lineWidth: 0.5)
-        }
-
-        // Bandwidth meter (maxed out)
-        let barX: CGFloat = 40
-        let barY: CGFloat = 30
-        let barW = size.width - 80
-        let barH: CGFloat = 24
-        let bgRect = CGRect(x: barX, y: barY, width: barW, height: barH)
-        context.fill(RoundedRectangle(cornerRadius: 4).path(in: bgRect),
-                    with: .color(.white.opacity(0.05)))
-        let fillPct = min(1.0, time * 0.12)
-        let fillRect = CGRect(x: barX, y: barY, width: barW * fillPct, height: barH)
-        context.fill(RoundedRectangle(cornerRadius: 4).path(in: fillRect),
-                    with: .color(.red.opacity(0.7)))
-
-        // Sybil count
-        let countFlash = 0.6 + 0.4 * sin(time * 4)
+        context.fill(RoundedRectangle(cornerRadius: 8).path(in: rect),
+                    with: .color(.black.opacity(0.6)))
+        context.stroke(RoundedRectangle(cornerRadius: 8).path(in: rect),
+                      with: .color(Cast.coral.opacity(0.7)),
+                      style: StrokeStyle(lineWidth: 1.2, dash: [4, 4]))
         context.draw(
-            Text("SYBIL NODES: \(sybilCount)")
-                .font(.system(size: settings.scaled(14), weight: .heavy, design: .monospaced))
-                .foregroundColor(.red.opacity(countFlash)),
-            at: CGPoint(x: size.width * 0.75, y: 80)
+            Text("AARON'S VAULT")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(Cast.coral.opacity(0.9)),
+            at: CGPoint(x: rect.midX, y: rect.minY + 12)
         )
-
-        context.draw(
-            Text("BANDWIDTH: \(Int(fillPct * 100))% — NETWORK COLLAPSE")
-                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
-                .foregroundColor(.red.opacity(0.5)),
-            at: CGPoint(x: cx, y: barY + barH + 14)
-        )
-
-        context.draw(
-            Text("10,000 SYBIL NODES REQUEST FULL HISTORY — HONEST NETWORK DROWNS")
-                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
-                .foregroundColor(.red.opacity(0.5)),
-            at: CGPoint(x: cx, y: size.height - 40)
-        )
-    }
-
-    // MARK: - Scene 3: The Separation
-
-    private func renderSeparation(context: inout GraphicsContext, size: CGSize, time: Double) {
-        let cx = size.width / 2
-        let cy = size.height / 2
-        let appear = min(1.0, time * 0.25)
-
-        // LEFT: Crisis = Order (green)
-        let leftW: CGFloat = size.width * 0.35
-        let leftH: CGFloat = size.height * 0.45
-        let leftRect = CGRect(x: cx - leftW - 40, y: cy - leftH / 2, width: leftW, height: leftH)
-        context.fill(RoundedRectangle(cornerRadius: 16).path(in: leftRect),
-                    with: .color(.green.opacity(0.08 * appear)))
-        context.stroke(RoundedRectangle(cornerRadius: 16).path(in: leftRect),
-                      with: .color(.green.opacity(0.5 * appear)), lineWidth: 2)
-
-        context.draw(
-            Text("CRISIS")
-                .font(.system(size: settings.scaled(24), weight: .heavy, design: .monospaced))
-                .foregroundColor(.green.opacity(0.8 * appear)),
-            at: CGPoint(x: leftRect.midX, y: leftRect.midY - 30)
-        )
-        context.draw(
-            Text("CONSENSUS LAYER")
-                .font(.system(size: settings.scaled(12), weight: .bold, design: .monospaced))
-                .foregroundColor(.green.opacity(0.5 * appear)),
-            at: CGPoint(x: leftRect.midX, y: leftRect.midY)
-        )
-        context.draw(
-            Text("deterministic ordering")
-                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                .foregroundColor(.green.opacity(0.4 * appear)),
-            at: CGPoint(x: leftRect.midX, y: leftRect.midY + 20)
-        )
-        context.draw(
-            Text("from DAG structure")
-                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                .foregroundColor(.green.opacity(0.3 * appear)),
-            at: CGPoint(x: leftRect.midX, y: leftRect.midY + 36)
-        )
-
-        // RIGHT: DA Layer = Storage (blue)
-        let rightRect = CGRect(x: cx + 40, y: cy - leftH / 2, width: leftW, height: leftH)
-        context.fill(RoundedRectangle(cornerRadius: 16).path(in: rightRect),
-                    with: .color(.blue.opacity(0.08 * appear)))
-        context.stroke(RoundedRectangle(cornerRadius: 16).path(in: rightRect),
-                      with: .color(.blue.opacity(0.5 * appear)), lineWidth: 2)
-
-        context.draw(
-            Text("DA LAYER")
-                .font(.system(size: settings.scaled(24), weight: .heavy, design: .monospaced))
-                .foregroundColor(.blue.opacity(0.8 * appear)),
-            at: CGPoint(x: rightRect.midX, y: rightRect.midY - 30)
-        )
-        context.draw(
-            Text("STORAGE & RETRIEVAL")
-                .font(.system(size: settings.scaled(12), weight: .bold, design: .monospaced))
-                .foregroundColor(.blue.opacity(0.5 * appear)),
-            at: CGPoint(x: rightRect.midX, y: rightRect.midY)
-        )
-        context.draw(
-            Text("erasure coding")
-                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                .foregroundColor(.blue.opacity(0.4 * appear)),
-            at: CGPoint(x: rightRect.midX, y: rightRect.midY + 20)
-        )
-        context.draw(
-            Text("incentivized storage")
-                .font(.system(size: settings.scaled(10), weight: .medium, design: .monospaced))
-                .foregroundColor(.blue.opacity(0.3 * appear)),
-            at: CGPoint(x: rightRect.midX, y: rightRect.midY + 36)
-        )
-
-        // Arrow between them
-        let arrowAppear = min(1.0, max(0, time * 0.25 - 0.5))
-        if arrowAppear > 0.05 {
-            var arrow = Path()
-            arrow.move(to: CGPoint(x: leftRect.maxX + 5, y: cy))
-            arrow.addLine(to: CGPoint(x: rightRect.minX - 5, y: cy))
-            context.stroke(arrow, with: .color(.white.opacity(0.5 * arrowAppear)), lineWidth: 2)
-
-            // Arrowhead
-            var head = Path()
-            head.move(to: CGPoint(x: rightRect.minX - 5, y: cy))
-            head.addLine(to: CGPoint(x: rightRect.minX - 15, y: cy - 6))
-            head.addLine(to: CGPoint(x: rightRect.minX - 15, y: cy + 6))
-            head.closeSubpath()
-            context.fill(head, with: .color(.white.opacity(0.5 * arrowAppear)))
-
+        // Body chunks visible as small filled rectangles inside the vault
+        if world.xiBodyInAaronVault {
+            let chunksRows = 4
+            let chunksCols = 6
+            let chunkW: CGFloat = 18
+            let chunkH: CGFloat = 12
+            let gridX = rect.minX + (rect.width - CGFloat(chunksCols) * (chunkW + 2)) / 2
+            let gridY = rect.minY + 30
+            for row in 0..<chunksRows {
+                for col in 0..<chunksCols {
+                    let x = gridX + CGFloat(col) * (chunkW + 2)
+                    let y = gridY + CGFloat(row) * (chunkH + 2)
+                    let chunkRect = CGRect(x: x, y: y, width: chunkW, height: chunkH)
+                    context.fill(RoundedRectangle(cornerRadius: 2).path(in: chunkRect),
+                                with: .color(Cast.coral.opacity(0.85)))
+                }
+            }
             context.draw(
-                Text("HASH COMMITMENTS")
+                Text("ξ body  ·  1 MB")
                     .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.4 * arrowAppear)),
-                at: CGPoint(x: cx, y: cy - 20)
+                    .foregroundColor(.white.opacity(0.85)),
+                at: CGPoint(x: rect.midX, y: rect.maxY - 12)
+            )
+        } else {
+            context.draw(
+                Text("(empty)")
+                    .font(.system(size: settings.scaled(9), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4)),
+                at: CGPoint(x: rect.midX, y: rect.midY)
             )
         }
+    }
 
+    // MARK: - Hash-only flight envelope (small, with ⚠)
+
+    private func drawHashFlight(
+        in context: inout GraphicsContext, size: CGSize,
+        flight: Ch07WorldState.HashFlight
+    ) {
+        let lift: CGFloat = 36
+        let from = castPosition(cast: .aaron, size: size)
+        let to = castPosition(cast: flight.to, size: size)
+        let fromTrack = CGPoint(x: from.x, y: from.y - lift)
+        let toTrack = CGPoint(x: to.x, y: to.y - lift)
+        var path = Path()
+        path.move(to: fromTrack)
+        path.addLine(to: toTrack)
+        context.stroke(path, with: .color(Cast.coral.opacity(0.22)),
+                      style: StrokeStyle(lineWidth: 1.0, dash: [3, 5]))
+        let p = CGFloat(flight.progress)
+        let pos = CGPoint(x: fromTrack.x + (toTrack.x - fromTrack.x) * p,
+                          y: fromTrack.y + (toTrack.y - fromTrack.y) * p)
+        // Smaller envelope (hash only, no body)
+        let envW: CGFloat = 52
+        let envH: CGFloat = 22
+        let rect = CGRect(x: pos.x - envW / 2, y: pos.y - envH / 2,
+                          width: envW, height: envH)
+        context.fill(RoundedRectangle(cornerRadius: 4).path(in: rect),
+                    with: .color(Cast.coral.opacity(0.95)))
+        context.stroke(RoundedRectangle(cornerRadius: 4).path(in: rect),
+                      with: .color(.white.opacity(0.7)), lineWidth: 1.0)
         context.draw(
-            Text("TWO SEPARATE LAYERS — COUPLED ONLY BY CRYPTOGRAPHIC HASHES")
-                .font(.system(size: settings.scaled(10), weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.3 * appear)),
-            at: CGPoint(x: cx, y: size.height - 40)
+            Text("ξ hash")
+                .font(.system(size: settings.scaled(9), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white),
+            at: pos
+        )
+    }
+
+    // MARK: - Ask arrow + timeout flash
+
+    private func drawAskArrow(
+        in context: inout GraphicsContext, size: CGSize,
+        ask: Ch07WorldState.AskArrow
+    ) {
+        let from = castPosition(cast: ask.asker, size: size)
+        let to = castPosition(cast: .aaron, size: size)
+        let p = CGFloat(ask.progress)
+        let endX = from.x + (to.x - from.x) * p
+        let endY = from.y + (to.y - from.y) * p
+        var path = Path()
+        path.move(to: from)
+        path.addLine(to: CGPoint(x: endX, y: endY))
+        context.stroke(path,
+                      with: .color(.white.opacity(0.6)),
+                      style: StrokeStyle(lineWidth: 1.6, dash: [4, 4]))
+        context.draw(
+            Text("? ξ body please")
+                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85)),
+            at: CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 - 14)
+        )
+    }
+
+    private func drawTimeoutFlash(
+        in context: inout GraphicsContext, size: CGSize,
+        asker: Ch01Cast, t: Double
+    ) {
+        let from = castPosition(cast: asker, size: size)
+        let to = castPosition(cast: .aaron, size: size)
+        let mid = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
+        let pulse = 0.7 + 0.3 * sin(t * 4)
+        context.draw(
+            Text("✗")
+                .font(.system(size: settings.scaled(28), weight: .heavy, design: .monospaced))
+                .foregroundColor(.red.opacity(0.95 * pulse)),
+            at: mid
+        )
+        context.draw(
+            Text("AARON SILENT — REQUEST TIMED OUT")
+                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                .foregroundColor(.red.opacity(0.95)),
+            at: CGPoint(x: mid.x, y: mid.y + 24)
+        )
+    }
+
+    // MARK: - Stuck badge
+
+    private func drawStuckBadge(
+        in context: inout GraphicsContext, size: CGSize, alpha: Double
+    ) {
+        context.draw(
+            Text("⛔ DA PROBLEM — Aaron knows ξ's body. Nobody else can use it.")
+                .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
+                .foregroundColor(.red.opacity(0.95 * alpha)),
+            at: CGPoint(x: size.width / 2, y: size.height - 60)
+        )
+        context.draw(
+            Text("→ erasure coding (next chapter) makes data un-loseable.")
+                .font(.system(size: settings.scaled(11), weight: .bold, design: .monospaced))
+                .foregroundColor(.yellow.opacity(0.85 * alpha)),
+            at: CGPoint(x: size.width / 2, y: size.height - 40)
+        )
+    }
+
+    private func drawBeatTag(
+        in context: inout GraphicsContext, size: CGSize, world: Ch07WorldState
+    ) {
+        guard let beatId = world.activeBeat?.id else { return }
+        context.draw(
+            Text(beatId)
+                .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.20)),
+            at: CGPoint(x: size.width - 14, y: 10), anchor: .trailing
         )
     }
 }

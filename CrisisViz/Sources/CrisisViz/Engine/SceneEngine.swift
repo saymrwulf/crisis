@@ -80,6 +80,11 @@ final class SceneEngine {
         SceneAddress(chapter: 6, scene: 0): 22.5,
         SceneAddress(chapter: 6, scene: 1): 14.0,
         SceneAddress(chapter: 6, scene: 2): 15.0,
+        // Ch07 — DA problem (4 scenes)
+        SceneAddress(chapter: 7, scene: 0): 17.5,
+        SceneAddress(chapter: 7, scene: 1): 20.0,
+        SceneAddress(chapter: 7, scene: 2): 21.0,
+        SceneAddress(chapter: 7, scene: 3): 10.0,
         // Ch09 — Byzantine (2 scenes mapping to Ch09Timeline windows)
         SceneAddress(chapter: 9, scene: 0): 47.5,
         SceneAddress(chapter: 9, scene: 1): 32.0,
