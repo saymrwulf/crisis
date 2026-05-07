@@ -80,8 +80,139 @@ struct Ch02_Graph: View {
             drawOpenEnvelope(in: &context, size: size, env: env)
         }
 
-        // 10. Footer: timeline position + active beat label, faint.
+        // 10. Perception towers at the bottom — one per cast, each
+        //     stacking the messages that cast has accepted, in the
+        //     order they arrived. Aaron and Ben end up with the same
+        //     ordered stack (α, β, γ); Carl ends up with (α, γ, β)
+        //     because β reached him after he'd already written γ. The
+        //     different stack orderings make the asymmetry physically
+        //     visible at a glance.
+        drawPerceptionTowers(in: &context, size: size, world: world, t: t)
+
+        // 11. Beat tag (testbed-only debug label).
         drawFooter(in: &context, size: size, t: t, world: world)
+    }
+
+    // MARK: - Perception towers
+
+    /// Bottom-of-canvas towers. One per cast member that has been
+    /// introduced. Each tower shows the ordered list of messages in
+    /// that cast's local view. New blocks slide up into place as
+    /// `acceptIntoView` beats fire — the active block is at full
+    /// opacity once the beat completes.
+    private func drawPerceptionTowers(
+        in context: inout GraphicsContext, size: CGSize,
+        world: Ch01WorldState, t: Double
+    ) {
+        let casts: [Ch01Cast] = [.aaron, .ben, .carl, .dave]
+        let visibleCasts = casts.filter { world.introduced.contains($0) }
+        guard !visibleCasts.isEmpty else { return }
+
+        // Tower geometry. Block size is generous so message-id labels
+        // stay readable. Total tower span sits in the lower band of the
+        // canvas, well clear of the cast lanes (lanes 0-3 are at
+        // y ≈ 116..450) and clear of the GlassNarration overlay
+        // (occupies bottom-LEFT in the live app — towers stay center).
+        let blockH: CGFloat = 26
+        let blockGap: CGFloat = 4
+        let towerH: CGFloat = 4 * (blockH + blockGap) + 28  // header + 4 blocks max
+        let baseY: CGFloat = size.height - 110
+        let towerW: CGFloat = 110
+        let totalW = CGFloat(visibleCasts.count) * towerW
+                    + CGFloat(visibleCasts.count - 1) * 24
+        let startX = (size.width - totalW) / 2
+
+        // Detect the message currently being added (if any) so its
+        // block can fade in over the active beat's progress.
+        var activeAcceptingMid: String? = nil
+        var activeAcceptingCast: Ch01Cast? = nil
+        if let active = world.activeBeat {
+            switch active.kind {
+            case .acceptIntoView(let at, let mid):
+                activeAcceptingMid = mid
+                activeAcceptingCast = at
+            case .seal(let mid):
+                activeAcceptingMid = mid
+                activeAcceptingCast = Ch01Timeline.messages[mid]?.author
+            default: break
+            }
+        }
+
+        for (i, cast) in visibleCasts.enumerated() {
+            let towerX = startX + CGFloat(i) * (towerW + 24)
+            let towerCenter = towerX + towerW / 2
+            let color = castColor(cast)
+
+            // Header: cast name above the tower.
+            context.draw(
+                Text(cast.role.displayName.uppercased())
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(color.opacity(0.85)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 4)
+            )
+            // "VIEW" sub-label
+            context.draw(
+                Text("VIEW")
+                    .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.35)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 18)
+            )
+            // Tower base line — thin axis showing the floor of the stack.
+            var baseline = Path()
+            baseline.move(to: CGPoint(x: towerX, y: baseY))
+            baseline.addLine(to: CGPoint(x: towerX + towerW, y: baseY))
+            context.stroke(baseline,
+                          with: .color(color.opacity(0.45)),
+                          lineWidth: 1.2)
+            // Vertical guides — faint, so the empty tower silhouette
+            // is visible before any block has landed.
+            var leftRail = Path()
+            leftRail.move(to: CGPoint(x: towerX, y: baseY))
+            leftRail.addLine(to: CGPoint(x: towerX, y: baseY - towerH + 26))
+            context.stroke(leftRail, with: .color(color.opacity(0.18)),
+                          style: StrokeStyle(lineWidth: 0.8, dash: [3, 4]))
+            var rightRail = Path()
+            rightRail.move(to: CGPoint(x: towerX + towerW, y: baseY))
+            rightRail.addLine(to: CGPoint(x: towerX + towerW, y: baseY - towerH + 26))
+            context.stroke(rightRail, with: .color(color.opacity(0.18)),
+                          style: StrokeStyle(lineWidth: 0.8, dash: [3, 4]))
+
+            // Stack the blocks.
+            let order = world.viewOrder[cast] ?? []
+            for (j, mid) in order.enumerated() {
+                guard let msg = Ch01Timeline.messages[mid] else { continue }
+                let isActiveDrop = (activeAcceptingMid == mid && activeAcceptingCast == cast)
+                let dropProgress = isActiveDrop
+                    ? max(0, min(1, world.activeProgress))
+                    : 1.0
+                // Easing: cubic-out so the block "settles" gracefully.
+                let eased = 1 - pow(1 - dropProgress, 3)
+                let restY = baseY - CGFloat(j + 1) * (blockH + blockGap)
+                // The dropping block falls from below the baseline up
+                // to its rest Y. Earlier blocks sit at full opacity.
+                let dropFrom = baseY + 30
+                let blockY = restY * eased + dropFrom * (1 - eased)
+                let alpha = 0.4 + 0.6 * eased
+                let rect = CGRect(x: towerX + 6, y: blockY,
+                                  width: towerW - 12, height: blockH)
+                let blockColor = castColor(authorOf(mid))
+                context.fill(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                            with: .color(blockColor.opacity(0.88 * alpha)))
+                context.stroke(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                              with: .color(.white.opacity(0.45 * alpha)),
+                              lineWidth: 1.0)
+                context.draw(
+                    Text("\(mid)  \(msg.hashShort)")
+                        .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white.opacity(alpha)),
+                    at: CGPoint(x: rect.midX, y: rect.midY)
+                )
+            }
+        }
+    }
+
+    private func authorOf(_ mid: String) -> Ch01Cast {
+        Ch01Timeline.messages[mid]?.author ?? .aaron
     }
 
     // MARK: - Lane geometry

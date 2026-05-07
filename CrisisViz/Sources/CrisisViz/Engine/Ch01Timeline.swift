@@ -121,6 +121,11 @@ struct Ch01WorldState {
     var sealedMessages: Set<String> = []
     /// Each cast member's local view: messages they have fully accepted.
     var views: [Ch01Cast: Set<String>] = [:]
+    /// Same content as `views`, but in the order each cast accepted them.
+    /// Used to drive the "perception towers" at the bottom of the canvas
+    /// — Aaron sees α first, then β, then γ; Carl sees α, then γ, then β
+    /// (the asymmetry is visible as a different stack ordering).
+    var viewOrder: [Ch01Cast: [String]] = [:]
     /// What the active recipient has read of the just-arrived envelope —
     /// payload (if .readBody fired), parents list (if .readParents
     /// fired), each individual resolved parent.
@@ -448,6 +453,9 @@ enum Ch01Timeline {
             // Author "knows" their own message after sealing.
             if let msg = messages[mid] {
                 w.views[msg.author, default: []].insert(mid)
+                if !w.viewOrder[msg.author, default: []].contains(mid) {
+                    w.viewOrder[msg.author, default: []].append(mid)
+                }
             }
             // Once sealed, drop the composing state.
             if !isActive { w.composing = nil }
@@ -502,6 +510,9 @@ enum Ch01Timeline {
         case .acceptIntoView(let at, let mid):
             // Permanent: recipient now holds the message.
             w.views[at, default: []].insert(mid)
+            if !w.viewOrder[at, default: []].contains(mid) {
+                w.viewOrder[at, default: []].append(mid)
+            }
             // Once accepted, the open envelope is dismissed.
             if !isActive {
                 if w.openEnvelope?.recipient == at && w.openEnvelope?.messageId == mid {

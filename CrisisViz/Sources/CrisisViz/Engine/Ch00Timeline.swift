@@ -47,6 +47,19 @@ struct Ch00WorldState {
     var daveOminous: Double = 0          // 0..1, red glow + warning text
     var activeBeat: Ch00Beat? = nil
     var activeProgress: Double = 0
+    /// Per-cast tower contents — abstract preview blocks. During the
+    /// `logsDiverge` beat each cast accumulates a few colored blocks in
+    /// a DIFFERENT order, foreshadowing the asymmetry that becomes
+    /// concrete in Ch01.
+    var towerBlocks: [Ch01Cast: [Ch00TowerBlock]] = [:]
+}
+
+/// One block in a Ch00 perception tower — abstract, no real digest.
+struct Ch00TowerBlock {
+    let label: String
+    /// Whose color the block carries (so each tower mixes colors,
+    /// the way local logs in real Crisis would).
+    let authorCast: Ch01Cast
 }
 
 // MARK: - Timeline
@@ -152,6 +165,37 @@ enum Ch00Timeline {
             case .logsDiverge:
                 w.divergeProgress = progress
                 if !isActive { w.divergeProgress = 1 }
+                // Populate each tower with a sequence of mixed-color
+                // blocks in a DIFFERENT order per cast. The blocks
+                // appear one at a time, paced over the beat's duration,
+                // so the viewer can see each player's stack grow
+                // independently — same population, different histories.
+                let perTowerOrders: [Ch01Cast: [Ch00TowerBlock]] = [
+                    .aaron: [
+                        .init(label: "tx-1", authorCast: .aaron),
+                        .init(label: "tx-2", authorCast: .ben),
+                        .init(label: "tx-3", authorCast: .carl),
+                    ],
+                    .ben: [
+                        .init(label: "tx-2", authorCast: .ben),
+                        .init(label: "tx-1", authorCast: .aaron),
+                        .init(label: "tx-3", authorCast: .carl),
+                    ],
+                    .carl: [
+                        .init(label: "tx-3", authorCast: .carl),
+                        .init(label: "tx-2", authorCast: .ben),
+                        .init(label: "tx-1", authorCast: .aaron),
+                    ],
+                    .dave: [
+                        .init(label: "tx-4", authorCast: .dave),
+                        .init(label: "tx-1", authorCast: .aaron),
+                    ],
+                ]
+                let perTowerProgress = isActive ? progress : 1.0
+                for (cast, blocks) in perTowerOrders {
+                    let revealed = Int(Double(blocks.count) * perTowerProgress)
+                    w.towerBlocks[cast] = Array(blocks.prefix(revealed))
+                }
             case .needAgreement:
                 w.convergeProgress = progress
                 if !isActive { w.convergeProgress = 1 }

@@ -46,7 +46,84 @@ struct Ch01_Problem: View {
             drawTitle(in: &context, size: size,
                       text: title, alpha: world.titleAlpha)
         }
+        drawPerceptionTowers(in: &context, size: size, world: world)
         drawBeatTag(in: &context, size: size, world: world)
+    }
+
+    // MARK: - Perception towers (Ch00 abstract preview)
+
+    /// Bottom-of-canvas towers, one per introduced cast. They fill with
+    /// abstract `tx-N` blocks during the `logsDiverge` beat, in a
+    /// DIFFERENT order per cast — a preview of the same structure that
+    /// Ch01 fills with real α/β/γ messages.
+    private func drawPerceptionTowers(
+        in context: inout GraphicsContext, size: CGSize,
+        world: Ch00WorldState
+    ) {
+        let casts: [Ch01Cast] = [.aaron, .ben, .carl, .dave]
+        let visibleCasts = casts.filter { world.introduced.contains($0) }
+        guard !visibleCasts.isEmpty else { return }
+
+        let blockH: CGFloat = 26
+        let blockGap: CGFloat = 4
+        let towerH: CGFloat = 4 * (blockH + blockGap) + 28
+        let baseY: CGFloat = size.height - 110
+        let towerW: CGFloat = 110
+        let totalW = CGFloat(visibleCasts.count) * towerW
+                    + CGFloat(visibleCasts.count - 1) * 24
+        let startX = (size.width - totalW) / 2
+
+        for (i, cast) in visibleCasts.enumerated() {
+            let towerX = startX + CGFloat(i) * (towerW + 24)
+            let towerCenter = towerX + towerW / 2
+            let color = castColor(cast)
+
+            // Header
+            context.draw(
+                Text(cast.role.displayName.uppercased())
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(color.opacity(0.85)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 4)
+            )
+            context.draw(
+                Text("VIEW")
+                    .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.35)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 18)
+            )
+            // Baseline + rails
+            var baseline = Path()
+            baseline.move(to: CGPoint(x: towerX, y: baseY))
+            baseline.addLine(to: CGPoint(x: towerX + towerW, y: baseY))
+            context.stroke(baseline, with: .color(color.opacity(0.45)),
+                          lineWidth: 1.2)
+            for railX in [towerX, towerX + towerW] {
+                var rail = Path()
+                rail.move(to: CGPoint(x: railX, y: baseY))
+                rail.addLine(to: CGPoint(x: railX, y: baseY - towerH + 26))
+                context.stroke(rail, with: .color(color.opacity(0.18)),
+                              style: StrokeStyle(lineWidth: 0.8, dash: [3, 4]))
+            }
+
+            // Blocks
+            let blocks = world.towerBlocks[cast] ?? []
+            for (j, block) in blocks.enumerated() {
+                let blockY = baseY - CGFloat(j + 1) * (blockH + blockGap)
+                let rect = CGRect(x: towerX + 6, y: blockY,
+                                  width: towerW - 12, height: blockH)
+                let blockColor = castColor(block.authorCast)
+                context.fill(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                            with: .color(blockColor.opacity(0.88)))
+                context.stroke(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                              with: .color(.white.opacity(0.45)), lineWidth: 1.0)
+                context.draw(
+                    Text(block.label)
+                        .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white),
+                    at: CGPoint(x: rect.midX, y: rect.midY)
+                )
+            }
+        }
     }
 
     // MARK: - Lane geometry (mirrors Ch01's; will extract to a shared
