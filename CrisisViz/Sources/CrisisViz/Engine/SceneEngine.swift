@@ -60,6 +60,11 @@ final class SceneEngine {
         SceneAddress(chapter: 1, scene: 4): 37.0,
         SceneAddress(chapter: 1, scene: 5): 37.5,
         SceneAddress(chapter: 1, scene: 6): 44.5,
+        // Ch02 — partition (4 scenes mapping to Ch02Timeline windows)
+        SceneAddress(chapter: 2, scene: 0): 14.0,
+        SceneAddress(chapter: 2, scene: 1): 35.0,
+        SceneAddress(chapter: 2, scene: 2): 22.5,
+        SceneAddress(chapter: 2, scene: 3): 44.0,
     ]
 
     /// Effective duration for the current scene, honoring overrides.
