@@ -85,6 +85,12 @@ final class SceneEngine {
         SceneAddress(chapter: 7, scene: 1): 20.0,
         SceneAddress(chapter: 7, scene: 2): 21.0,
         SceneAddress(chapter: 7, scene: 3): 10.0,
+        // Ch08 — erasure shards (5 scenes)
+        SceneAddress(chapter: 8, scene: 0): 17.0,
+        SceneAddress(chapter: 8, scene: 1): 30.0,
+        SceneAddress(chapter: 8, scene: 2): 17.0,
+        SceneAddress(chapter: 8, scene: 3): 11.0,
+        SceneAddress(chapter: 8, scene: 4): 10.0,
         // Ch09 — Byzantine (2 scenes mapping to Ch09Timeline windows)
         SceneAddress(chapter: 9, scene: 0): 47.5,
         SceneAddress(chapter: 9, scene: 1): 32.0,

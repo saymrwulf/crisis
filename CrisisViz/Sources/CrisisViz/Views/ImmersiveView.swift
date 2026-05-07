@@ -172,6 +172,8 @@ struct ImmersiveView: View {
             return Ch06Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
         case 7:
             return Ch07Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
+        case 8:
+            return Ch08Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
         case 9:
             return Ch09Scenes.narrationAt(sceneIndex: addr.scene, localTime: localTime)
         default:
