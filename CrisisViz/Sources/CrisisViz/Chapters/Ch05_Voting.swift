@@ -1,24 +1,11 @@
 import SwiftUI
 
-/// Ch05 (chapter index 4): "Did you see what I saw?"
+/// Ch04 (chapter index 4, file Ch05_Voting.swift):
+/// "Did you see what I saw?" — virtual voting via strongly-seeing paths.
 ///
-/// The redesigned virtual-voting chapter. Where the previous version
-/// asserted "votes are inferred from the graph" with a single static
-/// SVP highlight, this version walks the viewer through the collapse
-/// step by step at ~3 seconds per step.
-///
-/// **Pacing & step count.** The user explicitly asked for "10 steps (or
-/// more) with slower speed (appr. 3 s)". The scene auto-advance interval
-/// is 8 s, so we split the lesson across the chapter's 3 scenes:
-///
-///   - Scene 0 (≈8 s): steps 1-3   (highlight Aaron, highlight Carl, draw Aaron's cone)
-///   - Scene 1 (≈8 s): steps 4-6   (draw Carl's cone, pulse the overlap, surface ancestor a)
-///   - Scene 2 (≈8 s): steps 7-10  (surface ancestor b, badge both vertices, migrate, snap consensus)
-///
-/// Each step adds ONE new visual element on top of what was already
-/// drawn; nothing is removed. That is what "no hard cuts" means in
-/// practice — by the time we reach step 10 the canvas tells the whole
-/// story.
+/// Renders from `Ch04Timeline`. Picks Aaron's recent vertex ε on his
+/// lane, picks Carl's ε on his, walks each ancestor cone (ε → γ → α)
+/// edge by edge, then highlights the overlap.
 struct Ch05_Voting: View {
     let sceneIndex: Int
     let localTime: Double
@@ -26,448 +13,336 @@ struct Ch05_Voting: View {
     let dm: DataManager
     @Environment(AppSettings.self) private var settings
 
-    /// Mid-late simulation: Aaron and Carl have produced enough vertices
-    /// that their depth-2 ancestor cones overlap meaningfully. With the
-    /// 80-step simulation, step 30 sits comfortably before convergence
-    /// (step 40), so the convergence collapse here is genuinely a *teaching*
-    /// preview of what the protocol does, not a replay of a fait accompli.
-    private let dataStep = 30
-
-    // Scene → number of steps (must sum to 10).
-    private static let stepsPerScene = [3, 3, 4]
-
     var body: some View {
         Canvas { context, size in
-            render(context: &context, size: size, time: localTime)
+            let t = Ch04Scenes.timelineT(sceneIndex: sceneIndex,
+                                          localTime: localTime)
+            render(in: &context, size: size, t: t)
         }
     }
 
-    private func render(context: inout GraphicsContext, size: CGSize, time: Double) {
-        guard dm.sim != nil,
-              let snap = dm.honestData(step: dataStep) else { return }
-
-        let nodes = dm.castOrderedNodes()  // Aaron, Ben, Carl, Dave at top — peers below
-        let vertices = snap.vertices
-        let edges = snap.edges
-
-        let layout = DAGLayout.compute(
-            vertices: vertices, edges: edges, nodes: nodes,
-            canvasSize: size, margin: 60
-        )
-        let minRound = vertices.map { $0.round }.min() ?? 0
-
-        // Background — present in every step.
-        layout.drawNodeLanes(in: &context, nodes: nodes, canvasSize: size, dm: dm,
-                             textScale: settings.textScale)
-        layout.drawRoundSeparators(in: &context, canvasSize: size, minRound: minRound,
-                                   alpha: 0.25, textScale: settings.textScale)
-        layout.drawEdges(in: &context, edges: edges, alpha: 0.18)
-        layout.drawVertices(in: &context, vertices: vertices, nodes: nodes, dm: dm,
-                            showLabels: false, textScale: settings.textScale)
-
-        // ---------- Find the convergence pair ----------
-        // v = Aaron's heaviest late-round vertex
-        // w = Carl's  heaviest late-round vertex
-        let aaronPid = pid(for: Cast.aaron)
-        let carlPid  = pid(for: Cast.carl)
-
-        guard
-            let v = pickPairVertex(in: vertices, processIdHex: aaronPid),
-            let w = pickPairVertex(in: vertices, processIdHex: carlPid),
-            v.digestHex != w.digestHex
-        else {
-            // Fallback: draw a hint and return so the chapter doesn't go blank.
-            drawCenteredHint(context: &context, size: size,
-                             text: "Need richer data — try advancing the simulation.")
-            return
+    private func render(in context: inout GraphicsContext, size: CGSize, t: Double) {
+        let world = Ch04Timeline.state(at: t)
+        drawLanes(in: &context, size: size)
+        drawCastFigures(in: &context, size: size)
+        drawAcceptedVertices(in: &context, size: size, world: world, t: t)
+        drawAcceptedEdges(in: &context, size: size)
+        if let edge = world.tracingEdge {
+            drawTracingEdge(in: &context, size: size, edge: edge)
         }
-
-        // Build parent map (e.from = child, e.to = parent).
-        var parentMap: [String: [String]] = [:]
-        for e in edges { parentMap[e.from, default: []].append(e.to) }
-
-        let coneV = ancestorCone(of: v.digestHex, parentMap: parentMap, depth: 2)
-        let coneW = ancestorCone(of: w.digestHex, parentMap: parentMap, depth: 2)
-        let shared = coneV.intersection(coneW).subtracting([v.digestHex, w.digestHex])
-        let sharedSorted = shared.sorted { (a, b) in
-            // Stable surface order: heaviest first, tie-break by hex
-            let va = vertices.first { $0.digestHex == a }
-            let vb = vertices.first { $0.digestHex == b }
-            let wa = va?.weight ?? 0
-            let wb = vb?.weight ?? 0
-            if wa != wb { return wa > wb }
-            return a < b
+        if world.voteCompleteAlpha > 0 {
+            drawVoteComplete(in: &context, size: size, alpha: world.voteCompleteAlpha)
         }
-        let ancestorA = sharedSorted.first
-        let ancestorB = sharedSorted.dropFirst().first
-
-        // ---------- Determine current step ----------
-        let stepsHere = Self.stepsPerScene[min(sceneIndex, Self.stepsPerScene.count - 1)]
-        let stepDuration = engine.sceneDuration / Double(stepsHere)
-        let priorSteps = Self.stepsPerScene.prefix(sceneIndex).reduce(0, +)
-        let localStep = min(stepsHere - 1, max(0, Int(time / stepDuration)))
-        let currentStep = priorSteps + localStep
-        let stepLocalTime = time - Double(localStep) * stepDuration
-
-        // ---------- Render cumulative steps ----------
-        // Each branch adds a new visual layer; falls through to add prior layers.
-        // We use a switch with explicit cases so the reader can see exactly
-        // what each step contributes.
-
-        // STEP 0: highlight Aaron's vertex v
-        if currentStep >= 0 {
-            highlightVertex(context: &context, layout: layout, vertex: v,
-                            color: Cast.coral, label: "Aaron — v",
-                            fade: appearFade(stepLocalTime, isStep: currentStep == 0))
-        }
-
-        // STEP 1: highlight Carl's vertex w
-        if currentStep >= 1 {
-            highlightVertex(context: &context, layout: layout, vertex: w,
-                            color: Cast.amber, label: "Carl — w",
-                            fade: appearFade(stepLocalTime, isStep: currentStep == 1))
-        }
-
-        // STEP 2: draw Aaron's ancestor cone
-        if currentStep >= 2 {
-            drawCone(context: &context, layout: layout, cone: coneV,
-                     vertices: vertices, color: Cast.coral,
-                     alpha: 0.25 * appearFade(stepLocalTime, isStep: currentStep == 2))
-        }
-
-        // STEP 3: draw Carl's ancestor cone (overlap visually emerges)
-        if currentStep >= 3 {
-            drawCone(context: &context, layout: layout, cone: coneW,
-                     vertices: vertices, color: Cast.amber,
-                     alpha: 0.25 * appearFade(stepLocalTime, isStep: currentStep == 3))
-        }
-
-        // STEP 4: pulse the overlap region (shared ancestors) in white
-        if currentStep >= 4 {
-            let pulse = 0.45 + 0.35 * sin(time * 2.4)
-            drawOverlap(context: &context, layout: layout,
-                        shared: shared, vertices: vertices,
-                        intensity: pulse * appearFade(stepLocalTime, isStep: currentStep == 4))
-        }
-
-        // STEP 5: surface shared ancestor `a`
-        if currentStep >= 5, let a = ancestorA {
-            tagAncestor(context: &context, layout: layout,
-                        digest: a, label: "shared ancestor a",
-                        vertices: vertices,
-                        fade: appearFade(stepLocalTime, isStep: currentStep == 5))
-        }
-
-        // STEP 6: surface shared ancestor `b`
-        if currentStep >= 6, let b = ancestorB {
-            tagAncestor(context: &context, layout: layout,
-                        digest: b, label: "shared ancestor b",
-                        vertices: vertices,
-                        fade: appearFade(stepLocalTime, isStep: currentStep == 6))
-        }
-
-        // STEP 7: badge both vertices with checkmarks (≥2 shared → agreement)
-        if currentStep >= 7 {
-            let fade = appearFade(stepLocalTime, isStep: currentStep == 7)
-            drawAgreementBadge(context: &context, layout: layout, vertex: v, fade: fade)
-            drawAgreementBadge(context: &context, layout: layout, vertex: w, fade: fade)
-        }
-
-        // STEP 8: migrate v and w toward each other along the round axis
-        let migrationProgress: Double = {
-            guard currentStep >= 8 else { return 0 }
-            if currentStep > 8 { return 1.0 }
-            return min(1.0, stepLocalTime / stepDuration)
-        }()
-        if migrationProgress > 0 {
-            drawMigration(context: &context, layout: layout, v: v, w: w,
-                          progress: migrationProgress, color: Cast.coral)
-        }
-
-        // STEP 9: snap consensus rectangle around the pair, with round number
-        if currentStep >= 9 {
-            drawConsensusFrame(context: &context, layout: layout, v: v, w: w,
-                               migration: 1.0, round: max(v.round, w.round),
-                               fade: appearFade(stepLocalTime, isStep: currentStep == 9))
-        }
-
-        // ---------- Step counter overlay ----------
-        let totalSteps = Self.stepsPerScene.reduce(0, +)
-        let counterAlpha: Double = 0.55
-        let counterText = "STEP \(currentStep + 1) / \(totalSteps)"
-        context.draw(
-            Text(counterText)
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(counterAlpha)),
-            at: CGPoint(x: size.width - 70, y: 18)
-        )
-
-        // Step legend along the bottom — one line per step, current step in white,
-        // others dimmed. This is what makes the lesson "explicit".
-        drawStepLegend(context: &context, size: size, currentStep: currentStep)
+        drawPerceptionTowers(in: &context, size: size)
+        drawBeatTag(in: &context, size: size, world: world)
     }
 
-    // MARK: - Helpers
+    // MARK: - Geometry / lookups
 
-    /// Returns the heaviest vertex authored by the given pid in the latest round
-    /// where that pid actually has a vertex. We bias toward later rounds so the
-    /// ancestor cones have something interesting to walk through.
-    private func pickPairVertex(in vertices: [VertexData], processIdHex: String) -> VertexData? {
-        let mine = vertices.filter { $0.processIdHex == processIdHex }
-        guard !mine.isEmpty else { return nil }
-        let maxRound = mine.map(\.round).max() ?? 0
-        // Drop a round if maxRound is the absolute frontier (richer cones earlier).
-        let target = max(0, maxRound - 1)
-        let inRound = mine.filter { $0.round == target }
-        return (inRound.isEmpty ? mine : inRound).max { $0.weight < $1.weight }
+    private func castLaneY(_ laneIdx: Int, size: CGSize) -> CGFloat {
+        let margin: CGFloat = 60
+        let nodeCount: CGFloat = 7
+        let laneHeight = (size.height - 2 * margin) / nodeCount
+        return margin + (CGFloat(laneIdx) + 0.5) * laneHeight
     }
 
-    private func pid(for role: CastRole) -> String {
-        dm.castByPid.first { $0.value.id == role.id }?.key ?? ""
-    }
-
-    /// BFS backward through parent edges to fixed depth.
-    private func ancestorCone(of root: String, parentMap: [String: [String]], depth: Int) -> Set<String> {
-        var seen: Set<String> = [root]
-        var frontier: [String] = [root]
-        for _ in 0..<depth {
-            var next: [String] = []
-            for v in frontier {
-                for p in parentMap[v] ?? [] where !seen.contains(p) {
-                    seen.insert(p)
-                    next.append(p)
-                }
-            }
-            frontier = next
-            if frontier.isEmpty { break }
+    private func castPosition(cast: Ch01Cast, size: CGSize) -> CGPoint {
+        let laneIdx: Int
+        switch cast {
+        case .aaron: laneIdx = 0
+        case .ben:   laneIdx = 1
+        case .carl:  laneIdx = 2
+        case .dave:  laneIdx = 3
         }
-        return seen
+        return CGPoint(x: size.width * 0.20, y: castLaneY(laneIdx, size: size))
     }
 
-    /// Fade-in over the first 0.6 s of a step. Steps after the active one
-    /// stay fully visible (return 1.0).
-    private func appearFade(_ t: Double, isStep: Bool) -> Double {
-        guard isStep else { return 1.0 }
-        return min(1.0, t / 0.6)
-    }
-
-    private func highlightVertex(
-        context: inout GraphicsContext, layout: DAGLayout,
-        vertex: VertexData, color: Color, label: String, fade: Double
-    ) {
-        guard let pos = layout.positions[vertex.digestHex] else { return }
-        // Halo
-        let r: CGFloat = 22
-        let haloRect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-        context.stroke(
-            Circle().path(in: haloRect),
-            with: .color(color.opacity(0.7 * fade)),
-            lineWidth: 3
-        )
-        // Soft glow
-        let g: CGFloat = 36
-        let glowRect = CGRect(x: pos.x - g, y: pos.y - g, width: g * 2, height: g * 2)
-        context.fill(
-            Circle().path(in: glowRect),
-            with: .color(color.opacity(0.10 * fade))
-        )
-        // Label
-        context.draw(
-            Text(label)
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(color.opacity(0.95 * fade)),
-            at: CGPoint(x: pos.x, y: pos.y - r - 12)
-        )
-    }
-
-    private func drawCone(
-        context: inout GraphicsContext, layout: DAGLayout,
-        cone: Set<String>, vertices: [VertexData],
-        color: Color, alpha: Double
-    ) {
-        for digest in cone {
-            guard let pos = layout.positions[digest] else { continue }
-            let r: CGFloat = 14
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            context.fill(Circle().path(in: rect), with: .color(color.opacity(alpha)))
+    private func castColor(_ cast: Ch01Cast) -> Color {
+        switch cast {
+        case .aaron: return Cast.coral
+        case .ben:   return Cast.teal
+        case .carl:  return Cast.amber
+        case .dave:  return Cast.violet
         }
     }
 
-    private func drawOverlap(
-        context: inout GraphicsContext, layout: DAGLayout,
-        shared: Set<String>, vertices: [VertexData],
-        intensity: Double
-    ) {
-        for digest in shared {
-            guard let pos = layout.positions[digest] else { continue }
-            let r: CGFloat = 18
-            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-            // Pulsing white outline + soft white fill: emphasizes "BOTH saw this".
-            context.stroke(
-                Circle().path(in: rect),
-                with: .color(.white.opacity(0.85 * intensity)),
-                lineWidth: 2.2
+    private func authorOf(_ mid: String) -> Ch01Cast {
+        if let m = Ch01Timeline.messages[mid] { return m.author }
+        if let m = Ch02Timeline.messages[mid] { return m.author }
+        return .aaron
+    }
+
+    private func parentsOf(_ mid: String) -> [String] {
+        if let m = Ch01Timeline.messages[mid] { return m.parents }
+        if let m = Ch02Timeline.messages[mid] { return m.parents }
+        return []
+    }
+
+    private static let allMessages: [String] = ["α", "β", "γ", "δ", "ε"]
+    private static let castLanes: [(Ch01Cast, Int)] = [(.aaron, 0), (.ben, 1), (.carl, 2), (.dave, 3)]
+
+    private func vertexPosition(cast: Ch01Cast, mid: String, size: CGSize) -> CGPoint? {
+        guard let i = Self.allMessages.firstIndex(of: mid) else { return nil }
+        let laneIdx: Int
+        switch cast {
+        case .aaron: laneIdx = 0
+        case .ben:   laneIdx = 1
+        case .carl:  laneIdx = 2
+        case .dave:  laneIdx = 3
+        }
+        let lane = castLaneY(laneIdx, size: size)
+        let castX = castPosition(cast: cast, size: size).x
+        return CGPoint(x: castX + 70 + CGFloat(i) * 56, y: lane)
+    }
+
+    // MARK: - Lanes / cast
+
+    private func drawLanes(in context: inout GraphicsContext, size: CGSize) {
+        for (cast, idx) in Self.castLanes {
+            let y = castLaneY(idx, size: size)
+            var path = Path()
+            path.move(to: CGPoint(x: 36, y: y))
+            path.addLine(to: CGPoint(x: size.width - 24, y: y))
+            context.stroke(path, with: .color(castColor(cast).opacity(0.18)),
+                          style: StrokeStyle(lineWidth: 0.8, dash: [4, 6]))
+            context.draw(
+                Text(cast.role.displayName.capitalized)
+                    .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
+                    .foregroundColor(castColor(cast).opacity(0.75)),
+                at: CGPoint(x: 24, y: y), anchor: .leading
+            )
+        }
+    }
+
+    private func drawCastFigures(in context: inout GraphicsContext, size: CGSize) {
+        for cast in Ch01Cast.allCases {
+            let pos = castPosition(cast: cast, size: size)
+            let r: CGFloat = 26
+            let color = castColor(cast)
+            let haloR = r * 1.5
+            context.fill(
+                Circle().path(in: CGRect(x: pos.x - haloR, y: pos.y - haloR,
+                                          width: haloR * 2, height: haloR * 2)),
+                with: .color(color.opacity(0.10))
             )
             context.fill(
-                Circle().path(in: rect.insetBy(dx: 4, dy: 4)),
-                with: .color(.white.opacity(0.18 * intensity))
+                Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r,
+                                          width: r * 2, height: r * 2)),
+                with: .color(color.opacity(0.95))
             )
-        }
-    }
-
-    private func tagAncestor(
-        context: inout GraphicsContext, layout: DAGLayout,
-        digest: String, label: String,
-        vertices: [VertexData], fade: Double
-    ) {
-        guard let pos = layout.positions[digest] else { return }
-        // Draw a chevron-style tag above the vertex pointing down.
-        let tagRect = CGRect(x: pos.x - 80, y: pos.y - 42, width: 160, height: 18)
-        context.fill(
-            RoundedRectangle(cornerRadius: 4).path(in: tagRect),
-            with: .color(.white.opacity(0.16 * fade))
-        )
-        context.stroke(
-            RoundedRectangle(cornerRadius: 4).path(in: tagRect),
-            with: .color(.white.opacity(0.6 * fade)),
-            lineWidth: 1
-        )
-        context.draw(
-            Text(label)
-                .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.95 * fade)),
-            at: CGPoint(x: pos.x, y: pos.y - 33)
-        )
-        // Connector line tag → vertex
-        var line = Path()
-        line.move(to: CGPoint(x: pos.x, y: pos.y - 24))
-        line.addLine(to: CGPoint(x: pos.x, y: pos.y - 14))
-        context.stroke(line, with: .color(.white.opacity(0.6 * fade)), lineWidth: 1)
-    }
-
-    private func drawAgreementBadge(
-        context: inout GraphicsContext, layout: DAGLayout,
-        vertex: VertexData, fade: Double
-    ) {
-        guard let pos = layout.positions[vertex.digestHex] else { return }
-        let badgeCenter = CGPoint(x: pos.x + 18, y: pos.y - 18)
-        let r: CGFloat = 9
-        let rect = CGRect(x: badgeCenter.x - r, y: badgeCenter.y - r, width: r * 2, height: r * 2)
-        context.fill(Circle().path(in: rect), with: .color(.green.opacity(0.85 * fade)))
-        context.draw(
-            Text("✓")
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.95 * fade)),
-            at: badgeCenter
-        )
-    }
-
-    /// Render v and w sliding toward each other. We compute their original
-    /// positions from `layout.positions` and interpolate.
-    private func drawMigration(
-        context: inout GraphicsContext, layout: DAGLayout,
-        v: VertexData, w: VertexData, progress: Double, color: Color
-    ) {
-        guard let pV = layout.positions[v.digestHex],
-              let pW = layout.positions[w.digestHex] else { return }
-        let target = CGPoint(x: (pV.x + pW.x) / 2, y: (pV.y + pW.y) / 2)
-        let curV = CGPoint(
-            x: pV.x + (target.x - pV.x) * progress * 0.65,
-            y: pV.y + (target.y - pV.y) * progress * 0.65
-        )
-        let curW = CGPoint(
-            x: pW.x + (target.x - pW.x) * progress * 0.65,
-            y: pW.y + (target.y - pW.y) * progress * 0.65
-        )
-
-        // Trail
-        var trailV = Path()
-        trailV.move(to: pV); trailV.addLine(to: curV)
-        context.stroke(trailV, with: .color(Cast.coral.opacity(0.4)),
-                       style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
-        var trailW = Path()
-        trailW.move(to: pW); trailW.addLine(to: curW)
-        context.stroke(trailW, with: .color(Cast.amber.opacity(0.4)),
-                       style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
-
-        // Moving copies of the vertices (drawn brighter than the originals
-        // so the eye follows the migration).
-        let r: CGFloat = 12
-        for (pt, c) in [(curV, Cast.coral), (curW, Cast.amber)] {
-            let rect = CGRect(x: pt.x - r, y: pt.y - r, width: r * 2, height: r * 2)
-            context.fill(Circle().path(in: rect), with: .color(c))
-            context.stroke(Circle().path(in: rect), with: .color(.white.opacity(0.9)), lineWidth: 1.5)
-        }
-    }
-
-    private func drawConsensusFrame(
-        context: inout GraphicsContext, layout: DAGLayout,
-        v: VertexData, w: VertexData, migration: Double, round: Int, fade: Double
-    ) {
-        guard let pV = layout.positions[v.digestHex],
-              let pW = layout.positions[w.digestHex] else { return }
-        let cx = (pV.x + pW.x) / 2
-        let cy = (pV.y + pW.y) / 2
-        let half: CGFloat = 70
-        let rect = CGRect(x: cx - half, y: cy - half * 0.7,
-                          width: half * 2, height: half * 1.4)
-        context.fill(
-            RoundedRectangle(cornerRadius: 12).path(in: rect),
-            with: .color(.green.opacity(0.10 * fade))
-        )
-        context.stroke(
-            RoundedRectangle(cornerRadius: 12).path(in: rect),
-            with: .color(.green.opacity(0.85 * fade)),
-            lineWidth: 2.2
-        )
-        context.draw(
-            Text("CONSENSUS · ROUND \(round)")
-                .font(.system(size: settings.scaled(11), weight: .heavy, design: .monospaced))
-                .foregroundColor(.green.opacity(0.95 * fade)),
-            at: CGPoint(x: cx, y: rect.minY - 12)
-        )
-    }
-
-    private func drawStepLegend(
-        context: inout GraphicsContext, size: CGSize, currentStep: Int
-    ) {
-        let labels = [
-            "1. highlight Aaron's vertex v",
-            "2. highlight Carl's vertex w",
-            "3. draw v's ancestor cone (coral)",
-            "4. draw w's ancestor cone (amber)",
-            "5. pulse the overlap (shared ancestors)",
-            "6. surface shared ancestor a",
-            "7. surface shared ancestor b",
-            "8. ≥2 shared → agreement badges",
-            "9. migrate v and w together",
-            "10. snap consensus around them",
-        ]
-        let lineHeight: CGFloat = 14
-        let totalHeight = CGFloat(labels.count) * lineHeight
-        let startY = size.height - totalHeight - 18
-        for (i, label) in labels.enumerated() {
-            let isCurrent = (i == currentStep)
-            let isPast = (i < currentStep)
-            let alpha: Double = isCurrent ? 1.0 : (isPast ? 0.6 : 0.3)
-            let weight: Font.Weight = isCurrent ? .heavy : .medium
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - r, y: pos.y - r,
+                                          width: r * 2, height: r * 2)),
+                with: .color(.white.opacity(0.5)), lineWidth: 1.5
+            )
             context.draw(
-                Text(label)
-                    .font(.system(size: settings.scaled(10), weight: weight, design: .monospaced))
-                    .foregroundColor(.white.opacity(alpha)),
-                at: CGPoint(x: 16 + 130, y: startY + CGFloat(i) * lineHeight)
+                Text(String(cast.role.displayName.prefix(1)))
+                    .font(.system(size: settings.scaled(18), weight: .heavy, design: .monospaced))
+                    .foregroundColor(.white),
+                at: pos
+            )
+            context.draw(
+                Text(cast.role.displayName.uppercased())
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(color.opacity(0.95)),
+                at: CGPoint(x: pos.x, y: pos.y + r + 12)
             )
         }
     }
 
-    private func drawCenteredHint(
-        context: inout GraphicsContext, size: CGSize, text: String
+    // MARK: - Vertices with cone halos + overlap pulse
+
+    private func drawAcceptedVertices(
+        in context: inout GraphicsContext, size: CGSize,
+        world: Ch04WorldState, t: Double
+    ) {
+        for (cast, _) in Self.castLanes {
+            for mid in Self.allMessages {
+                guard let pos = vertexPosition(cast: cast, mid: mid, size: size) else { continue }
+                drawVertex(in: &context, at: pos, messageId: mid,
+                           cast: cast, world: world, t: t)
+            }
+        }
+    }
+
+    private func drawVertex(
+        in context: inout GraphicsContext, at pos: CGPoint,
+        messageId: String, cast: Ch01Cast,
+        world: Ch04WorldState, t: Double
+    ) {
+        let r: CGFloat = 13
+        let color = castColor(authorOf(messageId))
+
+        // Leaf halo
+        if world.leaves[cast] == messageId {
+            let leafR: CGFloat = 22
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - leafR, y: pos.y - leafR,
+                                          width: leafR * 2, height: leafR * 2)),
+                with: .color(.yellow.opacity(0.95)), lineWidth: 2.4
+            )
+        }
+        // Cone ring
+        let inCone = world.cones[cast]?.contains(messageId) ?? false
+        if inCone && world.leaves[cast] != messageId {
+            let coneR: CGFloat = 19
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - coneR, y: pos.y - coneR,
+                                          width: coneR * 2, height: coneR * 2)),
+                with: .color(.yellow.opacity(0.85)), lineWidth: 1.8
+            )
+        }
+        // Overlap pulse
+        let isOverlapMember = world.overlapAlpha > 0
+            && world.overlap.contains(messageId)
+            && (cast == .aaron || cast == .carl)
+        if isOverlapMember {
+            let pulse = 0.7 + 0.3 * sin(t * 3)
+            let oR: CGFloat = 26
+            context.stroke(
+                Circle().path(in: CGRect(x: pos.x - oR, y: pos.y - oR,
+                                          width: oR * 2, height: oR * 2)),
+                with: .color(.white.opacity(0.9 * world.overlapAlpha * pulse)),
+                lineWidth: 2.0
+            )
+        }
+
+        let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
+        context.fill(Circle().path(in: rect),
+                    with: .color(color.opacity(0.85)))
+        context.stroke(Circle().path(in: rect),
+                      with: .color(.white.opacity(0.55)), lineWidth: 1.0)
+        context.draw(
+            Text(messageId)
+                .font(.system(size: settings.scaled(12), weight: .heavy, design: .monospaced))
+                .foregroundColor(.white),
+            at: pos
+        )
+    }
+
+    private func drawAcceptedEdges(in context: inout GraphicsContext, size: CGSize) {
+        for (cast, _) in Self.castLanes {
+            for mid in Self.allMessages {
+                guard let childPos = vertexPosition(cast: cast, mid: mid, size: size) else { continue }
+                for parent in parentsOf(mid) {
+                    guard let parentPos = vertexPosition(cast: cast, mid: parent, size: size) else { continue }
+                    var path = Path()
+                    path.move(to: CGPoint(x: childPos.x - 14, y: childPos.y))
+                    path.addLine(to: CGPoint(x: parentPos.x + 14, y: parentPos.y))
+                    context.stroke(path,
+                                  with: .color(castColor(authorOf(mid)).opacity(0.45)),
+                                  lineWidth: 1.0)
+                }
+            }
+        }
+    }
+
+    // MARK: - Tracing edge
+
+    private func drawTracingEdge(
+        in context: inout GraphicsContext, size: CGSize,
+        edge: Ch04WorldState.TracingEdge
+    ) {
+        guard let childPos = vertexPosition(cast: edge.cast, mid: edge.from, size: size),
+              let parentPos = vertexPosition(cast: edge.cast, mid: edge.to, size: size) else { return }
+        let p = CGFloat(edge.progress)
+        let from = CGPoint(x: childPos.x - 14, y: childPos.y)
+        let to = CGPoint(x: parentPos.x + 14, y: parentPos.y)
+        let head = CGPoint(x: from.x + (to.x - from.x) * p,
+                           y: from.y + (to.y - from.y) * p)
+        var full = Path(); full.move(to: from); full.addLine(to: to)
+        context.stroke(full, with: .color(.yellow.opacity(0.45)),
+                      lineWidth: 1.8)
+        var trace = Path(); trace.move(to: from); trace.addLine(to: head)
+        context.stroke(trace, with: .color(.yellow.opacity(0.95)),
+                      lineWidth: 3.0)
+        context.fill(Circle().path(in: CGRect(x: head.x - 4, y: head.y - 4,
+                                               width: 8, height: 8)),
+                    with: .color(.yellow.opacity(0.95)))
+    }
+
+    // MARK: - Vote complete banner
+
+    private func drawVoteComplete(
+        in context: inout GraphicsContext, size: CGSize, alpha: Double
     ) {
         context.draw(
-            Text(text)
+            Text("✓ IMPLICIT VOTE COMPLETE — no 'vote' message was ever sent")
                 .font(.system(size: settings.scaled(13), weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7)),
-            at: CGPoint(x: size.width / 2, y: size.height / 2)
+                .foregroundColor(.green.opacity(0.95 * alpha)),
+            at: CGPoint(x: size.width / 2, y: size.height - 50)
+        )
+    }
+
+    // MARK: - Perception towers
+
+    private func drawPerceptionTowers(in context: inout GraphicsContext, size: CGSize) {
+        let casts: [Ch01Cast] = [.aaron, .ben, .carl, .dave]
+        let blockH: CGFloat = 22
+        let blockGap: CGFloat = 3
+        let maxBlocks = 5
+        let towerH: CGFloat = CGFloat(maxBlocks) * (blockH + blockGap) + 28
+        let baseY: CGFloat = size.height - 90
+        let towerW: CGFloat = 110
+        let totalW = CGFloat(casts.count) * towerW + CGFloat(casts.count - 1) * 24
+        let startX = (size.width - totalW) / 2
+
+        for (i, cast) in casts.enumerated() {
+            let towerX = startX + CGFloat(i) * (towerW + 24)
+            let towerCenter = towerX + towerW / 2
+            let color = castColor(cast)
+
+            context.draw(
+                Text(cast.role.displayName.uppercased())
+                    .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                    .foregroundColor(color.opacity(0.85)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 4)
+            )
+            context.draw(
+                Text("VIEW")
+                    .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.35)),
+                at: CGPoint(x: towerCenter, y: baseY - towerH + 18)
+            )
+            var baseline = Path()
+            baseline.move(to: CGPoint(x: towerX, y: baseY))
+            baseline.addLine(to: CGPoint(x: towerX + towerW, y: baseY))
+            context.stroke(baseline, with: .color(color.opacity(0.45)), lineWidth: 1.2)
+            for railX in [towerX, towerX + towerW] {
+                var rail = Path()
+                rail.move(to: CGPoint(x: railX, y: baseY))
+                rail.addLine(to: CGPoint(x: railX, y: baseY - towerH + 26))
+                context.stroke(rail, with: .color(color.opacity(0.18)),
+                              style: StrokeStyle(lineWidth: 0.8, dash: [3, 4]))
+            }
+            for (j, mid) in Self.allMessages.enumerated() {
+                let blockY = baseY - CGFloat(j + 1) * (blockH + blockGap)
+                let rect = CGRect(x: towerX + 6, y: blockY,
+                                  width: towerW - 12, height: blockH)
+                let blockColor = castColor(authorOf(mid))
+                context.fill(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                            with: .color(blockColor.opacity(0.88)))
+                context.stroke(RoundedRectangle(cornerRadius: 5).path(in: rect),
+                              with: .color(.white.opacity(0.45)), lineWidth: 1.0)
+                context.draw(
+                    Text(mid)
+                        .font(.system(size: settings.scaled(10), weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white),
+                    at: CGPoint(x: rect.midX, y: rect.midY)
+                )
+            }
+        }
+    }
+
+    private func drawBeatTag(
+        in context: inout GraphicsContext, size: CGSize, world: Ch04WorldState
+    ) {
+        guard let beatId = world.activeBeat?.id else { return }
+        context.draw(
+            Text(beatId)
+                .font(.system(size: settings.scaled(8), weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.20)),
+            at: CGPoint(x: size.width - 14, y: 10), anchor: .trailing
         )
     }
 }

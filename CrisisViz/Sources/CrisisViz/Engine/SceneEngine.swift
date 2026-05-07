@@ -69,6 +69,10 @@ final class SceneEngine {
         SceneAddress(chapter: 3, scene: 0): 23.5,
         SceneAddress(chapter: 3, scene: 1): 20.5,
         SceneAddress(chapter: 3, scene: 2): 28.0,
+        // Ch04 — voting (3 scenes mapping to Ch04Timeline windows)
+        SceneAddress(chapter: 4, scene: 0): 16.0,
+        SceneAddress(chapter: 4, scene: 1): 23.5,
+        SceneAddress(chapter: 4, scene: 2): 23.0,
         // Ch09 — Byzantine (2 scenes mapping to Ch09Timeline windows)
         SceneAddress(chapter: 9, scene: 0): 47.5,
         SceneAddress(chapter: 9, scene: 1): 32.0,
