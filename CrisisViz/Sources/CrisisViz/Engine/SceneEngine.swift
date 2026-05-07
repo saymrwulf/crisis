@@ -65,6 +65,10 @@ final class SceneEngine {
         SceneAddress(chapter: 2, scene: 1): 35.0,
         SceneAddress(chapter: 2, scene: 2): 22.5,
         SceneAddress(chapter: 2, scene: 3): 44.0,
+        // Ch03 — rounds (3 scenes mapping to Ch03Timeline windows)
+        SceneAddress(chapter: 3, scene: 0): 23.5,
+        SceneAddress(chapter: 3, scene: 1): 20.5,
+        SceneAddress(chapter: 3, scene: 2): 28.0,
     ]
 
     /// Effective duration for the current scene, honoring overrides.
