@@ -75,6 +75,14 @@ class LiveClaudeAgent(CrisisAgent):
         self._system_prompt = system_prompt or self._default_system_prompt()
         self._invocations = 0
         self._already_adjudicated: set[str] = set()
+        # Conversation context — populated via observe() callbacks during
+        # the closed phase, and supplemented by self.graph introspection
+        # during the Crisis phase.
+        self._observed_history: list[Claim] = []
+
+    def observe(self, claim: Claim) -> None:
+        """Record a peer's claim into our conversation context."""
+        self._observed_history.append(claim)
 
     @staticmethod
     def _default_system_prompt() -> str:
@@ -115,8 +123,13 @@ class LiveClaudeAgent(CrisisAgent):
         self._client = anthropic.Anthropic()
         return self._client
 
-    def next_turn(self, turn: int, received_claims: list[Claim]) -> list[AgentTurn]:
-        """Issue one API call, parse, return Claims as AgentTurns."""
+    def try_emit(self) -> list[AgentTurn]:
+        """Issue one API call, parse, return Claims as AgentTurns.
+
+        Context is built from both `self._observed_history` (closed-phase
+        observations) and any Claim payloads in `self.graph` (Crisis-phase
+        gossiped messages from peers).
+        """
         self._invocations += 1
 
         # Which statements still need a verdict from me?
@@ -125,7 +138,18 @@ class LiveClaudeAgent(CrisisAgent):
         if not pending:
             return []
 
-        user_message = self._render_user_message(pending, received_claims)
+        # Crisis-phase: also peek at the agent's own graph for peer claims.
+        graph_observations: list[Claim] = []
+        for v in self.graph.all_vertices():
+            if v.id == self.process_id:
+                continue
+            try:
+                graph_observations.append(Claim.from_payload(v.payload))
+            except (ValueError, TypeError):
+                continue
+        context = self._observed_history + graph_observations
+
+        user_message = self._render_user_message(pending, context)
 
         client = self._get_client()
         response = client.messages.create(

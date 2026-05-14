@@ -35,9 +35,7 @@ def test_all_honest_agents_agree_on_ratified_alarms():
         split_a={"a", "c"},
         split_b={"b"},
     ))
-    m.run_crisis_phase(num_turns=2, gossip_rounds_per_turn=1)
-    m.emit_alarms_from_detectors()
-    m.run_gossip_round()
+    m.run_until_quiescent()
 
     # The headline assertion: three independent vantage points; same result.
     ratified_per_agent = {
@@ -73,9 +71,7 @@ def test_byzantine_alone_cannot_ratify():
     m.add_agent(MockAgent("c", [[]]))
     # No equivocation script — boundary opens cleanly.
     m.open_boundary(MockByzantineAgent("d", _intro(), [], set(), set()))
-    m.run_crisis_phase(num_turns=1, gossip_rounds_per_turn=1)
-    m.emit_alarms_from_detectors()
-    m.run_gossip_round()
+    m.run_until_quiescent()
 
     # No honest agent should have ratified anything.
     for name in ("a", "b", "c"):

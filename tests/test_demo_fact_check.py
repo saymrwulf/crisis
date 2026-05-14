@@ -22,7 +22,6 @@ class TestFactCheckEndToEnd:
         assert s.name == "fact_check"
         assert len(s.honest_agents) == 3
         assert s.byzantine_joiner.name == "agent_delta"
-        assert s.crisis_phase_turns == 2  # intro + equivocation
         assert "Pluto" in s.reference_doc
 
     def test_runs_through_all_phases(self):
@@ -30,14 +29,13 @@ class TestFactCheckEndToEnd:
         m = Mothership()
         for a in s.honest_agents:
             m.add_agent(a)
-        m.run_closed_phase(num_turns=s.closed_phase_turns)
+        m.run_closed_phase()
         m.open_boundary(s.byzantine_joiner)
-        m.run_crisis_phase(num_turns=s.crisis_phase_turns,
-                          gossip_rounds_per_turn=1)
-        m.emit_alarms_from_detectors()
-        m.run_gossip_round()
+        # One async run, no clock — alarms emit and propagate inside the loop
+        report = m.run_until_quiescent()
+        assert report.reached_quiescence
+        assert report.alarm_claims_emitted >= 3
 
-        # Every honest agent ratifies the same single alarm.
         threshold = quorum_for(m.boundary.size())
         ratified_sets = [
             m.ratified_alarms_from(name)
@@ -55,12 +53,9 @@ class TestFactCheckEndToEnd:
         m = Mothership()
         for a in s.honest_agents:
             m.add_agent(a)
-        m.run_closed_phase(num_turns=s.closed_phase_turns)
+        m.run_closed_phase()
         m.open_boundary(s.byzantine_joiner)
-        m.run_crisis_phase(num_turns=s.crisis_phase_turns,
-                          gossip_rounds_per_turn=1)
-        m.emit_alarms_from_detectors()
-        m.run_gossip_round()
+        m.run_until_quiescent()
 
         r = m.ratified_alarms_from("agent_alpha")[0]
         proof = build_proof(r)

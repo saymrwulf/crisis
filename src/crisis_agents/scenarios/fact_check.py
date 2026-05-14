@@ -150,8 +150,6 @@ def build_byzantine_joiner() -> CrisisAgent:
 class Scenario:
     name: str
     description: str
-    closed_phase_turns: int
-    crisis_phase_turns: int
     honest_agents: list[CrisisAgent]
     byzantine_joiner: CrisisAgent
     reference_doc: str
@@ -178,12 +176,11 @@ def build_fact_check_scenario(*, live: bool = False,
             "Three honest agents adjudicate six factual statements against "
             "a small reference doc. A fourth agent joins the team after the "
             "boundary opens and equivocates on statement s03. Crisis is "
-            "decentralized: every honest agent independently detects, emits "
-            "an AlarmClaim, and ratifies the alarm by quorum vote." + suffix
+            "decentralized AND asynchronous: every honest agent "
+            "independently detects, emits an AlarmClaim, and ratifies the "
+            "alarm by quorum vote. The mothership drives an event loop to "
+            "quiescence — no global clock." + suffix
         ),
-        closed_phase_turns=1,
-        # 2 Crisis turns: intro (turn 0) + equivocation (turn 1)
-        crisis_phase_turns=2,
         honest_agents=honest,
         byzantine_joiner=build_byzantine_joiner(),
         reference_doc=load_reference_doc(),

@@ -45,11 +45,14 @@ class AlarmClaim:
     Serializes to JSON for the Crisis Message payload. Recognizable by
     `kind == "alarm"`, distinguishing it from a regular `Claim` payload
     (which has `kind` absent or != "alarm" by convention).
+
+    `emitted_at_step` is the agent's local sequence number for ordering;
+    it is NOT a global clock tick — Crisis is asynchronous.
     """
     accused_process_id_hex: str
     statement_id: str
     witness_digests: tuple[str, str]
-    detected_at_turn: int
+    emitted_at_step: int
     kind: str = ALARM_KIND
 
     def to_payload(self) -> bytes:
@@ -64,16 +67,16 @@ class AlarmClaim:
             accused_process_id_hex=obj["accused_process_id_hex"],
             statement_id=obj["statement_id"],
             witness_digests=tuple(obj["witness_digests"]),  # type: ignore[arg-type]
-            detected_at_turn=obj["detected_at_turn"],
+            emitted_at_step=obj["emitted_at_step"],
         )
 
     @classmethod
-    def from_local_alarm(cls, alarm: LocalAlarm, detected_at_turn: int) -> "AlarmClaim":
+    def from_local_alarm(cls, alarm: LocalAlarm, emitted_at_step: int) -> "AlarmClaim":
         return cls(
             accused_process_id_hex=alarm.accused_process_id_hex,
             statement_id=alarm.statement_id,
             witness_digests=alarm.witness_digests,
-            detected_at_turn=detected_at_turn,
+            emitted_at_step=emitted_at_step,
         )
 
 

@@ -37,7 +37,7 @@ def _post_gossip_team() -> Mothership:
         split_b={"b"},
     )
     m.open_boundary(byz)
-    m.run_crisis_phase(num_turns=2, gossip_rounds_per_turn=1)
+    m.run_until_quiescent()
     return m
 
 
@@ -49,7 +49,7 @@ class TestDecentralizedDetection:
         m.add_agent(MockAgent("b", [[]]))
         joiner = MockByzantineAgent("d", _intro(), [], set(), set())
         m.open_boundary(joiner)
-        m.run_crisis_phase(num_turns=1, gossip_rounds_per_turn=1)
+        m.run_until_quiescent()
 
         # Every agent's own detection returns empty
         for agent in m.agents.values():

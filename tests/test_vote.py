@@ -42,11 +42,9 @@ def _full_run() -> Mothership:
         split_b={"b"},
     )
     m.open_boundary(byz)
-    m.run_crisis_phase(num_turns=2, gossip_rounds_per_turn=1)
+    m.run_until_quiescent()
     # Honest agents emit AlarmClaims based on what they observed.
-    m.emit_alarms_from_detectors()
     # One more gossip round so every honest agent sees all AlarmClaims.
-    m.run_gossip_round()
     return m
 
 
@@ -69,7 +67,7 @@ class TestAlarmClaimRoundtrip:
             accused_process_id_hex="76468f93",
             statement_id="s03",
             witness_digests=("aaaa", "bbbb"),
-            detected_at_turn=1,
+            emitted_at_step=1,
         )
         roundtrip = AlarmClaim.from_payload(ac.to_payload())
         assert roundtrip == ac
@@ -82,11 +80,11 @@ class TestAlarmClaimRoundtrip:
             statement_id="s03",
             witness_digests=("aa", "bb"),
         )
-        ac = AlarmClaim.from_local_alarm(la, detected_at_turn=5)
+        ac = AlarmClaim.from_local_alarm(la, emitted_at_step=5)
         assert ac.accused_process_id_hex == "22"
         assert ac.statement_id == "s03"
         assert ac.witness_digests == ("aa", "bb")
-        assert ac.detected_at_turn == 5
+        assert ac.emitted_at_step == 5
 
     def test_rejects_non_alarm_payload(self):
         regular_claim = Claim(

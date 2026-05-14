@@ -25,10 +25,13 @@ class TestClosedPhase:
         m = Mothership()
         m.add_agent(MockAgent("a", [[_claim("s01")]]))
         m.add_agent(MockAgent("b", [[_claim("s01")]]))
-        result = m.run_closed_phase(num_turns=1)
+        report = m.run_closed_phase()
 
         # Two agents emitted one claim each via the closed-phase log
-        assert len(result.closed_log) == 2
+        assert len(m.run_result.closed_log) == 2
+        # The async loop reached quiescence within the step budget
+        assert report.reached_quiescence
+        assert report.emissions == 2
 
         # No Crisis messages sent yet, so per-agent graphs are still empty
         for agent in m.agents.values():
@@ -69,20 +72,26 @@ class TestCrisisPhaseAgentOwnership:
         # Joiner with a single broadcast intro, no equivocation script
         joiner = MockByzantineAgent("d", _intro(), [], set(), set())
         m.open_boundary(joiner)
-        m.run_crisis_phase(num_turns=1, gossip_rounds_per_turn=0)
+        m.run_until_quiescent()
 
         for name, agent in m.agents.items():
             assert agent.graph.vertex_count() == 1, (
                 f"agent {name!r} should have received the intro broadcast"
             )
 
-    def test_targeted_emission_skips_non_targets(self):
-        """A target_subset emission only reaches its named peers."""
+    def test_targeted_emission_seeds_disjoint_views(self):
+        """After the async loop with gossip, every honest agent sees both
+        variants — but the byzantine itself never has both in its own graph
+        (it never re-receives its own targeted emissions, and gossip from
+        honest peers may or may not feed them back).
+
+        The protocol-level invariant: the byzantine's two contradictory
+        vertices end up reachable to every honest agent. THAT is what
+        decentralized detection depends on.
+        """
         m = Mothership()
         m.add_agent(MockAgent("a", [[]]))
         m.add_agent(MockAgent("b", [[]]))
-        # Byzantine: emits intro to everyone (turn 0), then equivocation
-        # to {a} vs {b} (turn 1).
         byz = MockByzantineAgent(
             "d", _intro(),
             scripted_pairs=[(
@@ -93,19 +102,18 @@ class TestCrisisPhaseAgentOwnership:
             split_b={"b"},
         )
         m.open_boundary(byz)
-        m.run_crisis_phase(num_turns=2, gossip_rounds_per_turn=0)
+        m.run_until_quiescent()
 
-        # a has: intro + variant-true; b has: intro + variant-false; d has: intro
-        graphs = {n: a.graph for n, a in m.agents.items()}
-        assert graphs["a"].vertex_count() == 2
-        assert graphs["b"].vertex_count() == 2
-        assert graphs["d"].vertex_count() == 1     # targeted emissions skip sender
-
-        # The variant payloads are distinct between a and b
-        a_payloads = [v.payload for v in graphs["a"].all_vertices()]
-        b_payloads = [v.payload for v in graphs["b"].all_vertices()]
-        assert any(b'"verdict":"true"' in p for p in a_payloads)
-        assert any(b'"verdict":"false"' in p for p in b_payloads)
+        # Every honest agent's graph has both variants of the equivocation
+        # (the post-condition that lets decentralized detection work).
+        for name in ("a", "b"):
+            payloads = [v.payload for v in m.agents[name].graph.all_vertices()]
+            assert any(b'"verdict":"true"' in p for p in payloads), (
+                f"agent {name!r} missing the true-variant"
+            )
+            assert any(b'"verdict":"false"' in p for p in payloads), (
+                f"agent {name!r} missing the false-variant"
+            )
 
 
 class TestGossipRound:
@@ -128,7 +136,7 @@ class TestGossipRound:
         )
         m.open_boundary(byz)
         # Two turns (intro + equivocation), then gossip
-        m.run_crisis_phase(num_turns=2, gossip_rounds_per_turn=1)
+        m.run_until_quiescent()
 
         # After gossip, every honest agent should have both byzantine variants
         # (intro + 2 equivocations = 3 vertices minimum). The byzantine itself
@@ -155,4 +163,4 @@ class TestGossipRound:
         m = Mothership()
         m.add_agent(MockAgent("a", [[_claim("s01")]]))
         with pytest.raises(RuntimeError, match="boundary not yet open"):
-            m.run_crisis_phase(num_turns=1)
+            m.run_until_quiescent()

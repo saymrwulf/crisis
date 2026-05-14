@@ -1,19 +1,19 @@
 """
-CrisisAgent — a first-class network participant.
+CrisisAgent — a first-class network participant in an asynchronous network.
 
 Each agent owns:
   - a stable 32-byte process_id (derived from its name)
   - its own LamportGraph (the agent's view of the network)
   - its own weight system (shared across the network for compatibility)
-  - the means to wrap Claims into Crisis Messages and extend its own graph
+  - decision logic: `try_emit()` is asked "do you have something to say?",
+    `pending_alarm_claims()` is asked "do you currently observe an
+    un-alarmed equivocation?"
 
-Crucially the agent is **NOT a passive script driven by the mothership**. The
-mothership coordinates the clock and the bootstrap; the agent does the work.
-
-This is the change from the centralized version: previously the mothership
-held a dict of all agents' graphs and called `_wrap_as_message` against each.
-Now `emit_claim` lives on the agent. The mothership routes the resulting
-message to its delivery targets, but it never reads the graph.
+There is no global clock. Agents don't see a "turn number" because there
+isn't one — any synchronicity in the network is virtual, derived from the
+DAG structure by the consensus algorithm itself (not by the driver loop).
+The mothership/driver just cycles asking each agent for any pending
+content until the network is quiescent.
 """
 
 from __future__ import annotations
@@ -38,27 +38,29 @@ def agent_id_from_name(name: str) -> bytes:
 
 @dataclass
 class AgentTurn:
-    """One emission from an agent in a given turn.
+    """One emission from an agent.
+
+    The word "turn" here is vestigial — it means "this single emission
+    event," not "a tick of a global clock." Kept because renaming the type
+    causes more churn than it's worth.
 
     Attributes:
         claim:           The Claim being emitted.
-        target_subset:   None means broadcast (every agent including sender
-                         receives it via the mothership's initial routing).
-                         A set of peer names means initial delivery is limited
-                         to those peers — the byzantine equivocation building
-                         block. Subsequent gossip rounds may propagate it to
-                         other peers anyway.
+        target_subset:   None means broadcast to every peer including
+                         sender. A set of peer names means initial delivery
+                         is limited to those peers (the byzantine
+                         equivocation building block).
     """
     claim: Claim
     target_subset: Optional[set[str]] = None
 
 
 class CrisisAgent(ABC):
-    """A network participant with its own graph and its own brain.
+    """An asynchronous network participant.
 
-    Concrete subclasses implement `next_turn` to decide what to say. The
-    base class handles emit/receive/gossip mechanics so every agent — mock
-    or live — uses the same Crisis-protocol machinery underneath.
+    Concrete subclasses implement `try_emit` to decide what to say. The
+    base class handles emit/receive/gossip/detect mechanics uniformly so
+    every agent — mock or live — uses the same Crisis substrate.
     """
 
     def __init__(self, name: str, *, weight_system: Optional[WeightSystem] = None):
@@ -68,15 +70,37 @@ class CrisisAgent(ABC):
         self.process_id: bytes = agent_id_from_name(name)
         self.weight_system: WeightSystem = weight_system or ProofOfWorkWeight(min_leading_zeros=0)
         self.graph: LamportGraph = LamportGraph(weight_system=self.weight_system)
+        # Track alarms we've already emitted so pending_alarm_claims doesn't
+        # repeat. Keyed by (accused, statement_id, sorted-witness-pair).
+        self._already_alarmed: set[tuple[str, str, tuple[str, str]]] = set()
 
     # ------------------------------------------------------------------
-    # Decision-making — to be implemented by subclasses
+    # Decision-making — implemented by subclasses
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def next_turn(self, turn: int, received_claims: list[Claim]) -> list[AgentTurn]:
-        """Produce this agent's emissions for the given turn."""
+    def try_emit(self) -> list[AgentTurn]:
+        """Return any emissions the agent is ready to make right now.
+
+        The agent decides based on its own internal state. The driver loop
+        asks this repeatedly until the agent returns nothing. There is no
+        turn argument — agents in an async network don't see a global tick.
+        """
         ...
+
+    def observe(self, claim: Claim) -> None:
+        """Optional callback for pre-Crisis context.
+
+        Used by the closed-phase loop: when one agent emits a claim, every
+        other agent's `observe(claim)` is called so they can incorporate
+        the conversation history into their own state. Default is no-op;
+        subclasses like LiveClaudeAgent override to maintain a context
+        buffer for their LLM prompt.
+
+        In the Crisis phase this is NOT called — agents introspect their
+        own LamportGraph for context. The closed phase has no graph yet.
+        """
+        pass
 
     # ------------------------------------------------------------------
     # Crisis-protocol mechanics — uniform across all agents
@@ -86,17 +110,20 @@ class CrisisAgent(ABC):
         """Wrap a Claim into a fully-valid Crisis Message built FROM this
         agent's own graph state.
 
-        The agent does NOT extend its own graph here — the mothership decides
-        whether the sender receives a copy (broadcast: yes; targeted: no, to
-        enable byzantine equivocation without immediately failing the chain
-        constraint in the sender's own graph).
+        The agent does NOT extend its own graph here — the routing layer
+        decides whether the sender's own graph receives a copy.
         """
-        payload = claim.to_payload()
+        return self._build_message(claim.to_payload())
 
+    def _build_message(self, payload: bytes) -> Message:
+        """Build a Crisis Message with arbitrary payload bytes.
+
+        Used by both `emit_claim` (regular Claims) and the alarm-emission
+        path (AlarmClaim payloads).
+        """
         digests_list: list[bytes] = []
 
-        # Step 1: chain link — if there's any same-id vertex in MY graph, the
-        # new message must reference one of them.
+        # Chain link
         same_id = [v for v in self.graph.all_vertices() if v.id == self.process_id]
         past_digests: set[bytes] = set()
         if same_id:
@@ -113,7 +140,7 @@ class CrisisAgent(ABC):
             digests_list.append(last.message_digest)
             past_digests = {v.message_digest for v in self.graph.past(last)}
 
-        # Step 2: cross-references — one most-recent vertex per other id.
+        # Cross-references
         seen_other_ids: set[bytes] = {self.process_id}
         for v in self.graph.all_vertices():
             if v.id in seen_other_ids:
@@ -123,10 +150,10 @@ class CrisisAgent(ABC):
             digests_list.append(v.message_digest)
             seen_other_ids.add(v.id)
 
-        # Step 3: mine a valid PoW nonce.
+        # Mine PoW
         if isinstance(self.weight_system, ProofOfWorkWeight):
             return self.weight_system.mine_nonce(
-                self.process_id, tuple(digests_list), payload
+                self.process_id, tuple(digests_list), payload,
             )
         return Message(
             nonce=os.urandom(NONCE_LENGTH),
@@ -136,36 +163,17 @@ class CrisisAgent(ABC):
         )
 
     def receive(self, message: Message) -> Optional[Vertex]:
-        """Extend my graph with the given message if integrity holds.
-
-        Returns the resulting Vertex on success, None if the integrity check
-        rejects it (duplicate, missing references, broken chain). Receiving
-        is idempotent: extending with a message whose digest is already in
-        the graph is a silent no-op (returns None).
-        """
+        """Extend my graph with the given message if integrity holds."""
         if message.compute_digest() in self.graph:
             return None
         return self.graph.extend(message)
 
-    def detect_mutations(self):
-        """Scan MY graph for byzantine equivocation. Returns a list of
-        LocalAlarms (defined in alarm.py). Imported lazily to avoid a
-        cyclic import at module load time.
-        """
-        from crisis_agents.alarm import detect_mutations_in_graph
-        return detect_mutations_in_graph(self.graph, self.name, self.process_id)
-
     def gossip_to(self, peer: "CrisisAgent") -> int:
-        """Share my vertices with `peer`. Returns the count newly accepted.
+        """Share my vertices with `peer`. Returns count newly accepted.
 
-        Iterates until no progress: a message can only be accepted after all
-        its referenced digests already exist in the peer's graph, so this is
-        a multi-pass extend (Algorithm 4 in the paper, in-process flavor).
-
-        Honest gossip: the sender doesn't pick what to share — it shares
-        everything it has, and the peer's integrity check filters. A byzantine
-        could selectively gossip, but that's modeled at emit time, not gossip
-        time; we don't expose a "skip this vertex" hook here.
+        Iterates until no progress: a message is only accepted after all
+        its referenced digests already exist in the peer's graph
+        (Algorithm 4 in the paper, in-process flavor).
         """
         accepted = 0
         progress = True
@@ -179,6 +187,49 @@ class CrisisAgent(ABC):
                     progress = True
         return accepted
 
+    def detect_mutations(self):
+        """Scan MY graph for same-id spacelike vertex pairs.
+
+        Returns a list of LocalAlarms. Imported lazily to avoid a cyclic
+        import at module load time.
+        """
+        from crisis_agents.alarm import detect_mutations_in_graph
+        return detect_mutations_in_graph(self.graph, self.name, self.process_id)
+
+    def pending_alarm_claims(self) -> list:
+        """Run detection and produce AlarmClaim payloads for any newly
+        observed equivocations.
+
+        An "already alarmed" set tracks claims this agent has already
+        emitted, so calling this repeatedly is idempotent — the driver
+        loop can call it until quiescence without flooding the network
+        with duplicate AlarmClaims.
+
+        Returns a list of AlarmClaim instances (defined in vote.py) that
+        the driver should broadcast on the agent's behalf.
+        """
+        from crisis_agents.vote import AlarmClaim
+
+        local_alarms = self.detect_mutations()
+        new_claims: list = []
+        for la in local_alarms:
+            # Canonical key for dedup
+            key = (la.accused_process_id_hex, la.statement_id, la.witness_digests)
+            if key in self._already_alarmed:
+                continue
+            # detected_at_step is the agent's local sequence number — we
+            # don't have a meaningful global step, so we use the count of
+            # alarms already raised by this agent as a stable ordinal.
+            ac = AlarmClaim(
+                accused_process_id_hex=la.accused_process_id_hex,
+                statement_id=la.statement_id,
+                witness_digests=la.witness_digests,
+                emitted_at_step=len(self._already_alarmed),
+            )
+            new_claims.append(ac)
+            self._already_alarmed.add(key)
+        return new_claims
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r}, id={self.process_id.hex()[:8]}...)"
 
@@ -191,13 +242,10 @@ class CrisisAgent(ABC):
 class MockAgent(CrisisAgent):
     """An agent that emits a predetermined sequence of claims.
 
-    `scripted_claims[N]` is the list of Claims this agent emits on its Nth
-    `next_turn()` invocation. The agent maintains its own invocation counter
-    independent of the mothership's turn counter, so it can be reused across
-    closed-phase and Crisis-phase calls without restarting.
-
-    All emissions are broadcast (no equivocation). For equivocation, use
-    `MockByzantineAgent`.
+    `scripted_claims[N]` is the list of Claims emitted on the agent's Nth
+    `try_emit()` invocation. After the script is exhausted, the agent
+    emits nothing forever — the driver loop's quiescence check terminates
+    naturally.
     """
 
     def __init__(self, name: str, scripted_claims: list[list[Claim]],
@@ -206,7 +254,7 @@ class MockAgent(CrisisAgent):
         self._script = scripted_claims
         self._invocations = 0
 
-    def next_turn(self, turn: int, received_claims: list[Claim]) -> list[AgentTurn]:
+    def try_emit(self) -> list[AgentTurn]:
         idx = self._invocations
         self._invocations += 1
         if idx >= len(self._script):
@@ -217,19 +265,16 @@ class MockAgent(CrisisAgent):
 class MockByzantineAgent(CrisisAgent):
     """An agent designed to equivocate.
 
-    Lifecycle:
-      - Invocation 0: emit a broadcast `intro_claim` (a benign "I've joined"
-        message). This is **necessary** for the equivocation step: both
-        variants of the equivocating claim will chain to this intro, so they
-        can propagate through the gossip layer (otherwise the chain constraint
-        in `Message.message_integrity` step 6 would reject the second variant
-        in any graph that already holds the first).
-      - Invocations 1..N: emit pairs of contradictory claims, with the first
-        variant targeted at `split_a` and the second at `split_b`. Both
-        variants in a pair carry the same `statement_id` but contradict on
-        `verdict`.
+    On its first `try_emit()` invocation it broadcasts an `intro_claim` so
+    every honest agent has a same-id vertex to chain the equivocation off.
+    On subsequent invocations it emits pairs of contradictory claims from
+    `scripted_pairs`, with the first variant targeted at `split_a` and the
+    second at `split_b`.
 
-    Set `scripted_pairs` empty to test "byzantine joined but didn't equivocate".
+    Byzantines never emit AlarmClaims about other agents — there's a
+    subclass override of `pending_alarm_claims` that returns empty. (A
+    more advanced byzantine could emit FALSE AlarmClaims to test the
+    quorum-vote isolation; not in scope for this PoC.)
     """
 
     def __init__(self, name: str, intro_claim: Claim,
@@ -245,12 +290,10 @@ class MockByzantineAgent(CrisisAgent):
         self._split_b = split_b
         self._invocations = 0
 
-    def next_turn(self, turn: int, received_claims: list[Claim]) -> list[AgentTurn]:
+    def try_emit(self) -> list[AgentTurn]:
         idx = self._invocations
         self._invocations += 1
         if idx == 0:
-            # The introduction turn: a single broadcast so all peers learn my
-            # identity and have a same-id vertex to chain my equivocations to.
             return [AgentTurn(claim=self._intro, target_subset=None)]
         pair_idx = idx - 1
         if pair_idx >= len(self._script):
@@ -260,3 +303,7 @@ class MockByzantineAgent(CrisisAgent):
         if claim_b is not None:
             out.append(AgentTurn(claim=claim_b, target_subset=set(self._split_b)))
         return out
+
+    def pending_alarm_claims(self) -> list:
+        """Byzantines don't emit alarms in our threat model."""
+        return []

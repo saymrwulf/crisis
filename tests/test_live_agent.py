@@ -66,7 +66,7 @@ class TestLiveClaudeAgent:
             "agent_alpha", reference_doc=_REF,
             statements=_STATEMENTS, client=client,
         )
-        turns = agent.next_turn(turn=0, received_claims=[])
+        turns = agent.try_emit()
         assert len(turns) == 2
         assert {t.claim.statement_id for t in turns} == {"s01", "s02"}
         verdicts = {t.claim.statement_id: t.claim.verdict for t in turns}
@@ -84,7 +84,7 @@ class TestLiveClaudeAgent:
             "agent_alpha", reference_doc=_REF,
             statements=_STATEMENTS, client=client,
         )
-        turns = agent.next_turn(turn=0, received_claims=[])
+        turns = agent.try_emit()
         assert len(turns) == 1
         assert turns[0].claim.statement_id == "s01"
 
@@ -94,7 +94,7 @@ class TestLiveClaudeAgent:
             "agent_alpha", reference_doc=_REF,
             statements=_STATEMENTS, client=client,
         )
-        turns = agent.next_turn(turn=0, received_claims=[])
+        turns = agent.try_emit()
         assert turns == []
 
     def test_skips_invalid_claim_objects_in_response(self):
@@ -108,7 +108,7 @@ class TestLiveClaudeAgent:
             "agent_alpha", reference_doc=_REF,
             statements=_STATEMENTS, client=client,
         )
-        turns = agent.next_turn(turn=0, received_claims=[])
+        turns = agent.try_emit()
         # Only the first item passes validation: bogus verdict and non-dict get skipped.
         assert len(turns) == 1
         assert turns[0].claim.statement_id == "s01"
@@ -122,11 +122,11 @@ class TestLiveClaudeAgent:
             statements=_STATEMENTS, client=client,
         )
         # First call adjudicates s01
-        first = agent.next_turn(turn=0, received_claims=[])
+        first = agent.try_emit()
         assert {t.claim.statement_id for t in first} == {"s01"}
 
         # Second call should only ask about s02 (s01 is already done)
-        second = agent.next_turn(turn=1, received_claims=[])
+        second = agent.try_emit()
         assert {t.claim.statement_id for t in second} == {"s02"}
 
         # The prompt sent for the second call should NOT mention s01
@@ -151,6 +151,6 @@ class TestLiveClaudeAgent:
             "agent_alpha", reference_doc=_REF,
             statements=_STATEMENTS, client=client,
         )
-        turns = agent.next_turn(turn=0, received_claims=[])
+        turns = agent.try_emit()
         assert len(turns) == 1
         assert len(turns[0].claim.evidence) == Claim.EVIDENCE_MAX_LEN

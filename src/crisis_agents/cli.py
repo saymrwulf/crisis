@@ -2,15 +2,15 @@
 crisis-agents — command-line entry point.
 
 Subcommands:
-    demo    Run a scripted scenario end-to-end. Walks the four phases:
-            closed team → boundary opens → Crisis-active rounds + gossip →
-            decentralized detection + alarm voting → proof emission.
+    demo    Run a scripted scenario end-to-end. The Crisis phase runs an
+            asynchronous event loop to quiescence — no global clock, no
+            fixed turn count.
     verify  Re-check a proof JSON for self-consistency.
 
 Examples:
     crisis-agents demo --scenario fact_check
     crisis-agents demo --scenario fact_check --live
-    crisis-agents verify proof_agent_delta_s03.json
+    crisis-agents verify proof_<accused>_s03.json
 """
 
 from __future__ import annotations
@@ -53,12 +53,13 @@ def _run_demo(args: argparse.Namespace) -> int:
         mothership.add_agent(agent)
 
     # ---- Phase 1: closed team, no Crisis ----
-    print(f"--- Phase 1: closed team, no Crisis ({scenario.closed_phase_turns} turn(s)) ---")
-    mothership.run_closed_phase(num_turns=scenario.closed_phase_turns)
+    print("--- Phase 1: closed team, no Crisis ---")
+    closed_report = mothership.run_closed_phase()
     honest_names = [a.name for a in mothership.agents.values()]
     print(
-        f"  {len(mothership.run_result.closed_log)} claims from "
-        f"{len(honest_names)} honest agent(s): {', '.join(honest_names)}"
+        f"  driven to quiescence in {closed_report.steps} step(s); "
+        f"{closed_report.emissions} claims from "
+        f"{len(honest_names)} honest agent(s)."
     )
     print(f"  Per-agent graphs: not yet allocated (Crisis is dormant).\n")
 
@@ -66,47 +67,42 @@ def _run_demo(args: argparse.Namespace) -> int:
     print(f"--- Phase 2: boundary opens — {scenario.byzantine_joiner.name} joins ---")
     mothership.open_boundary(scenario.byzantine_joiner)
     print(f"  Trust set is now {mothership.boundary.size()} agents.")
-    print(f"  Crisis is now ACTIVE for every subsequent emission.\n")
+    print(f"  Crisis is now ACTIVE — agents emit asynchronously.\n")
 
-    # ---- Phase 3: Crisis-active rounds (emission + gossip) ----
-    print(f"--- Phase 3: emission + gossip "
-          f"({scenario.crisis_phase_turns} turn(s)) ---")
-    mothership.run_crisis_phase(
-        num_turns=scenario.crisis_phase_turns,
-        gossip_rounds_per_turn=1,
+    # ---- Phase 3: async event loop to quiescence ----
+    print("--- Phase 3: asynchronous event loop (no clock) ---")
+    report = mothership.run_until_quiescent()
+    print(
+        f"  drove to quiescence in {report.steps} step(s):\n"
+        f"    {report.emissions:3d} regular emissions\n"
+        f"    {report.gossip_transfers:3d} gossip transfers\n"
+        f"    {report.alarm_claims_emitted:3d} alarm claims emitted"
     )
-    crisis_log = mothership.run_result.crisis_log
-    print(f"  {len(crisis_log)} Crisis messages emitted.")
-    print(f"  After gossip:")
+    print(f"  After convergence:")
     for name, agent in mothership.agents.items():
         print(f"    {name:14s} graph: {agent.graph.vertex_count():2d} vertices")
     print()
 
-    # ---- Phase 4: each agent independently detects ----
+    # ---- Phase 4: each agent's own detection result ----
     print("--- Phase 4: decentralized detection (each agent's own brain) ---")
-    local_alarms = {}
+    detected_by = []
     for name, agent in mothership.agents.items():
         alarms = agent.detect_mutations()
-        local_alarms[name] = alarms
         marker = "ALARM" if alarms else "ok   "
         suffix = ""
         if alarms:
+            detected_by.append(name)
             suffix = (f" — accuses {alarms[0].accused_process_id_hex[:16]}... "
                       f"on {alarms[0].statement_id}")
         print(f"    [{marker}] {name:14s}{suffix}")
-    detector_count = sum(1 for a in local_alarms.values() if a)
-    print(f"  {detector_count} of {len(mothership.agents)} agents independently "
-          f"detected byzantine behavior.\n")
+    print(f"  {len(detected_by)} of {len(mothership.agents)} agents detected "
+          f"byzantine behavior independently.\n")
 
-    # ---- Phase 5: alarm emission + quorum voting ----
-    print("--- Phase 5: alarms emitted + gossiped + ratified by quorum ---")
-    mothership.emit_alarms_from_detectors()
-    mothership.run_gossip_round()
+    # ---- Phase 5: quorum tally ----
+    print("--- Phase 5: ratification by quorum ---")
     threshold = quorum_for(mothership.boundary.size())
     print(f"  Quorum threshold = ⌈2*{mothership.boundary.size()}/3⌉ = {threshold}")
 
-    # All honest agents should agree on the ratified set — show by querying
-    # each of them and confirming.
     ratified_per_agent = {
         name: mothership.ratified_alarms_from(name)
         for name in mothership.agents
@@ -118,10 +114,7 @@ def _run_demo(args: argparse.Namespace) -> int:
             canonical = ratified_per_agent[name]
         elif ratified_per_agent[name] != canonical:
             all_agree = False
-    if all_agree:
-        marker = "✓"
-    else:
-        marker = "✗"
+    marker = "✓" if all_agree else "✗"
     print(f"  {marker} every honest agent's ratified set is identical "
           f"({'no chokepoint' if all_agree else 'DIVERGENCE'}).")
 
@@ -141,7 +134,6 @@ def _run_demo(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     for r in canonical:
         proof = build_proof(r)
-        # Use a stable filename based on accused + statement
         accused_short = r.accused_process_id_hex[:16]
         path = out_dir / f"proof_{accused_short}_{r.statement_id}.json"
         path.write_text(proof.to_json())
@@ -173,7 +165,7 @@ def _run_verify(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="crisis-agents",
-        description="Crisis-Agents — decentralized coordination for AI agent teams.",
+        description="Crisis-Agents — decentralized async coordination for AI agent teams.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -184,8 +176,7 @@ def main(argv: list[str] | None = None) -> int:
                       help="back the honest agents with real Claude API calls "
                            "(requires anthropic SDK + ANTHROPIC_API_KEY)")
     demo.add_argument("--model", default=None,
-                      help="Anthropic model id for --live (default: "
-                           "claude-haiku-4-5-20251001)")
+                      help="Anthropic model id for --live")
     demo.add_argument("--out-dir", default=".",
                       help="where to write proof JSON files (default: cwd)")
 
