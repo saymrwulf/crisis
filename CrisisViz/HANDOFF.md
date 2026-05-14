@@ -6,11 +6,22 @@ Last updated: **2026-05-14**.
 
 ---
 
+## 0. Sibling project notice — `crisis_agents` exists
+
+Since this file was last meaningfully updated, a sibling Python sub-project has landed: **`src/crisis_agents/`** — a coordination layer that uses the same `crisis` protocol substrate for a fundamentally different consumer (AI agent teams, not visualization). It produces `proof_*.json` documents instead of `crisis_data.json`.
+
+**Important for CrisisViz work:** the two sub-projects don't share code. `crisis_agents` does not produce data CrisisViz reads, and CrisisViz does not consume anything from `crisis_agents`. Refactoring either one cannot break the other.
+
+If a future curriculum chapter wants to visualize agent coordination (decentralized detection, gossip propagation, multi-detector alarm convergence), that's a substantial new effort — see the parent README's "future CrisisViz story" note. For now, **focus on the chapter and testbed work and treat `crisis_agents` as an unrelated package living in the same repo**.
+
+Reference: **[`../src/crisis_agents/README.md`](../src/crisis_agents/README.md)**.
+
+---
+
 ## 1. Current state — what's shipped
 
 - **All 10 chapters migrated** to the serial-beat timeline pattern (pure `state(at: t) -> WorldState`, scrubbable −16× to +16×, beat-bound narration).
 - **Testbed green** at the last clean run: 38/38 invariants pass, 0 source-audit errors, 36/36 MP4 clips written, 279 PNGs sane, 12/12 resize cases pass.
-- **`origin/master` at `fb9bc9c`** — working tree was clean before this documentation/testing pass. After this pass: README.md/INSTALL.md/LICENSE/CrisisViz README&HANDOFF/package-dmg.sh/Python tests landed.
 - **Bundle pipeline works.** `./bundle.sh` produces a working `CrisisViz.app`. `./package-dmg.sh` produces a working `CrisisViz.dmg` (ad-hoc signed; first-open Gatekeeper warning, right-click → Open).
 
 If you can't run the testbed and confirm it's green, **stop and fix that first** before making curriculum changes.
