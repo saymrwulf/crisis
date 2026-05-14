@@ -21,10 +21,14 @@ dev = [
     "pytest>=8.0",
     "rich>=13.0",
 ]
+live = [
+    "anthropic>=0.40",
+]
 
 [project.scripts]
 crisis-node = "crisis.node:main"
 crisis-demo = "crisis.demo:main"
+crisis-agents = "crisis_agents.cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
