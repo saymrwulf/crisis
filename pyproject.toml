@@ -4,9 +4,13 @@ version = "0.1.0"
 description = "Crisis: Probabilistically Self Organizing Total Order in Unstructured P2P Networks"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "CC-BY-4.0"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-    { name = "Mirco Richter (paper)", email = "mirco.richter@mailbox.org" },
+    { name = "saymrwulf" },
+]
+maintainers = [
+    { name = "Mirco Richter (paper author)", email = "mirco.richter@mailbox.org" },
 ]
 dependencies = [
     "networkx>=3.0",
