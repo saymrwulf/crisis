@@ -195,7 +195,8 @@ Then arrow keys ←/→ to navigate, **Space** to play/pause, the bottom slider 
 ## Where to read next
 
 - **[INSTALL.md](INSTALL.md)** — clone-to-running on a fresh macOS box. Prerequisites, Python venv setup, Swift toolchain, regenerating sim data, running the agents demo, troubleshooting.
-- **[src/crisis_agents/README.md](src/crisis_agents/README.md)** — the AI-agent coordination layer: architecture, six-phase walkthrough, decentralization principles, async event loop, quorum formula, live Claude mode, proof JSON shape.
+- **[src/crisis_agents/README.md](src/crisis_agents/README.md)** — the AI-agent coordination layer: pragmatic overview, threat model, modules, build/run/test, live Claude mode.
+- **[src/crisis_agents/DESIGN.md](src/crisis_agents/DESIGN.md)** — formal design reference for the agent layer: invariants (no chokepoint, no clock), proof sketches, the chain-constraint trap, quorum derivation, termination, failure-mode analysis, tests-as-invariants table.
 - **[CrisisViz/README.md](CrisisViz/README.md)** — Swift-side guide: serial-timeline pattern, testbed outputs, controls, cast convention.
 - **[CrisisViz/HANDOFF.md](CrisisViz/HANDOFF.md)** — engineering log for the next coding agent.
 
