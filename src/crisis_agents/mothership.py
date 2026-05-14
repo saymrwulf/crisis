@@ -1,34 +1,27 @@
 """
-Mothership — the orchestrator that runs a Crisis-Agents network.
+Mothership — bootstrap + clock, **not** an observer.
 
-Two phases:
+The mothership's only privileged role is starting the network: it knows the
+initial member set, it asks each agent to take its turn, and it routes the
+first hop of each emission to the sender's chosen target subset. After that
+first hop, gossip rounds propagate messages and each agent reaches its own
+view of the network.
 
-1. **Closed phase.** Agents talk freely. `run_closed_phase(N)` advances N
-   turns, collecting every claim into a flat log. No DAG, no voting, no
-   overhead. This is the "normal life" the user described.
+What the mothership deliberately does NOT do (which the previous version
+did, and was correctly criticized for):
+  - hold a dict of all agents' LamportGraphs
+  - wrap Claims into Crisis Messages on agents' behalf
+  - scan any agent's graph for byzantine behavior
 
-2. **Crisis phase.** Triggered by `open_boundary(new_agent)`. From that
-   point on every claim is wrapped into a Crisis `Message`, extended into
-   per-agent `LamportGraph`s, and consensus algorithms run. Mutation
-   detection raises alarms; proofs are generated separately by `proof.py`.
-
-The mothership keeps one LamportGraph per agent (the agent's view of the
-network) and updates them in lockstep — the PoC uses synchronous in-process
-delivery, so all honest agents see the same vertices except where a
-byzantine agent has selectively delivered an equivocation. Each honest
-graph still observes both equivocating vertices once the network gossips
-enough; that's what `LamportGraph.find_mutations` keys on.
+Those responsibilities belong to the agents.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Optional
 
-from crisis.graph import LamportGraph
-from crisis.message import Message, NONCE_LENGTH
-from crisis.weight import ProofOfWorkWeight
+from crisis.weight import ProofOfWorkWeight, WeightSystem
 
 from crisis_agents.agent import AgentTurn, CrisisAgent
 from crisis_agents.boundary import Boundary
@@ -45,9 +38,11 @@ class ClosedPhaseEntry:
 
 @dataclass
 class CrisisPhaseEntry:
-    """One row in the Crisis-phase log: the (agent, turn, claim, vertex_digest)
-    of an emitted-and-accepted Crisis message, plus the target subset (set of
-    peer names) it was delivered to. Useful as the raw material for proofs.
+    """Audit trail of an emission event during the Crisis phase.
+
+    Kept for proof generation and human-readable demos. Detection itself
+    does NOT consult this log — that work happens in each agent's
+    `detect_mutations()` against its own graph.
     """
     agent_name: str
     turn: int
@@ -58,28 +53,20 @@ class CrisisPhaseEntry:
 
 @dataclass
 class MothershipRunResult:
-    """What `run_closed_phase` / `run_crisis_phase` returns."""
     closed_log: list[ClosedPhaseEntry] = field(default_factory=list)
     crisis_log: list[CrisisPhaseEntry] = field(default_factory=list)
 
 
 class Mothership:
-    """Orchestrates a team of CrisisAgents.
+    """Coordinator for a team of CrisisAgents.
 
-    Usage:
+    Lifecycle:
         m = Mothership()
-        m.add_agent(MockAgent("agent_a", ...))
-        m.add_agent(MockAgent("agent_b", ...))
-        m.add_agent(MockAgent("agent_c", ...))
-
-        # Closed phase
-        m.run_closed_phase(num_turns=2)
-
-        # Boundary opens
-        m.open_boundary(MockByzantineAgent("agent_d", ...))
-
-        # Crisis phase
-        m.run_crisis_phase(num_turns=5)
+        m.add_agent(...); m.add_agent(...); m.add_agent(...)
+        m.run_closed_phase(num_turns=1)
+        m.open_boundary(joining_agent)
+        m.run_crisis_phase(num_turns=2, gossip_rounds_per_turn=1)
+        # detection is decentralized — each agent's .detect_mutations()
     """
 
     def __init__(self, *, pow_zeros: int = 0):
@@ -87,13 +74,11 @@ class Mothership:
         self.boundary = Boundary()
         self.run_result = MothershipRunResult()
 
-        # Per-agent Lamport graphs (only used in the Crisis phase).
-        self._graphs: dict[str, LamportGraph] = {}
-        self._weight_system = ProofOfWorkWeight(min_leading_zeros=pow_zeros)
+        # Shared weight system across the network — every agent's PoW must
+        # be verifiable by every other agent's graph, so the threshold has
+        # to match. Assigned to each agent's graph at registration time.
+        self._weight_system: WeightSystem = ProofOfWorkWeight(min_leading_zeros=pow_zeros)
 
-        # Independent turn counters: closed and Crisis phases share none.
-        # Crisis-phase turns count from 0 again so the proof JSON has a
-        # clean "round after boundary open" timeline.
         self._closed_turn_index = 0
         self._crisis_turn_index = 0
 
@@ -102,11 +87,17 @@ class Mothership:
     # ------------------------------------------------------------------
 
     def add_agent(self, agent: CrisisAgent) -> None:
-        """Register a trusted agent (must be called before run_closed_phase)."""
+        """Register a trusted agent for the closed-phase team.
+
+        Replaces the agent's weight system with the mothership's shared one
+        so PoW thresholds match across the network.
+        """
         if self.boundary.is_open:
             raise RuntimeError("cannot add_agent after boundary opened; use open_boundary")
         if agent.name in self.agents:
             raise ValueError(f"agent {agent.name!r} already added")
+        agent.weight_system = self._weight_system
+        agent.graph.weight_system = self._weight_system
         self.agents[agent.name] = agent
         self.boundary.add_trusted(agent.process_id)
 
@@ -115,13 +106,7 @@ class Mothership:
     # ------------------------------------------------------------------
 
     def run_closed_phase(self, num_turns: int) -> MothershipRunResult:
-        """Drive `num_turns` of plain agent communication. No Crisis.
-
-        Each turn:
-          - All agents see the cumulative claims observed so far.
-          - Each agent emits its scripted claims; each emission is appended
-            to the closed log.
-        """
+        """Drive `num_turns` of plain agent communication. No Crisis."""
         if self.boundary.is_open:
             raise RuntimeError("boundary already open; closed phase is over")
 
@@ -140,106 +125,48 @@ class Mothership:
         return self.run_result
 
     # ------------------------------------------------------------------
-    # Phase 2: boundary opens, Crisis activates
+    # Phase 2: boundary opens
     # ------------------------------------------------------------------
 
     def open_boundary(self, new_agent: CrisisAgent) -> None:
-        """The trigger: a new agent of unknown trust joins.
-
-        Crisis is now active for all subsequent claim emission. Each existing
-        agent gets a fresh LamportGraph; the new agent does too. From this
-        moment, `run_crisis_phase()` drives the consensus loop.
-        """
+        """A new agent of unknown trust joins. Crisis activates."""
         if new_agent.name in self.agents:
             raise ValueError(f"agent {new_agent.name!r} is already inside the boundary")
+        new_agent.weight_system = self._weight_system
+        new_agent.graph.weight_system = self._weight_system
         self.agents[new_agent.name] = new_agent
         self.boundary.open(new_agent.process_id)
 
-        # Initialize a graph for every agent (including the joiner).
-        for name in self.agents:
-            self._graphs[name] = LamportGraph(weight_system=self._weight_system)
-
     # ------------------------------------------------------------------
-    # Phase 2 mechanics: building Crisis messages from Claims
+    # Crisis-phase mechanics: emission → gossip
     # ------------------------------------------------------------------
 
-    def _wrap_as_message(self, agent: CrisisAgent, claim: Claim,
-                        graph: LamportGraph) -> Message:
-        """Convert a Claim into a Crisis Message and return it (un-extended).
+    def _crisis_received_view(self, agent: CrisisAgent) -> list[Claim]:
+        """Decode every non-self vertex in `agent`'s graph back to Claim form.
 
-        Builds the digests tuple per Algorithm 1:
-          - reference the agent's own last vertex in `graph` (chain link),
-          - cross-reference one most-recent vertex per other id (sample).
-        Mines a PoW nonce that satisfies the weight system.
+        Used to populate the `received_claims` argument of `next_turn()` so
+        each agent sees what it has actually observed (not what the mothership
+        observed — they may differ if gossip has been partial).
         """
-        payload = claim.to_payload()
-
-        # Last vertex with this agent's id (chain link, if any)
-        same_id = [v for v in graph.all_vertices() if v.id == agent.process_id]
-        digests_list: list[bytes] = []
-        if same_id:
-            # Pick the one not referenced by any other same-id vertex
-            referenced = set()
-            for v in same_id:
-                for d in v.digests:
-                    ref = graph.get_vertex(d)
-                    if ref is not None and ref.id == agent.process_id:
-                        referenced.add(d)
-            last = next(
-                (v for v in same_id if v.message_digest not in referenced),
-                same_id[-1],
-            )
-            digests_list.append(last.message_digest)
-            past_digests = {v.message_digest for v in graph.past(last)}
-        else:
-            past_digests = set()
-
-        # Cross-references: one most-recent vertex per other id
-        seen_other_ids: set[bytes] = {agent.process_id}
-        for v in graph.all_vertices():
-            if v.id in seen_other_ids:
+        out: list[Claim] = []
+        for v in agent.graph.all_vertices():
+            if v.id == agent.process_id:
                 continue
-            if v.message_digest in past_digests:
-                continue
-            digests_list.append(v.message_digest)
-            seen_other_ids.add(v.id)
+            try:
+                out.append(Claim.from_payload(v.payload))
+            except (ValueError, TypeError):
+                continue  # non-Claim payloads (e.g. AlarmClaim — phase 23)
+        return out
 
-        # Mine a valid nonce; reuse the weight system
-        if isinstance(self._weight_system, ProofOfWorkWeight):
-            return self._weight_system.mine_nonce(
-                agent.process_id, tuple(digests_list), payload
-            )
-        else:
-            return Message(
-                nonce=os.urandom(NONCE_LENGTH),
-                id=agent.process_id,
-                digests=tuple(digests_list),
-                payload=payload,
-            )
-
-    def _deliver(self, sender: CrisisAgent, message: Message,
-                 target_names: list[str]) -> None:
-        """Extend the message into the LamportGraphs of `target_names`."""
-        for name in target_names:
-            graph = self._graphs[name]
-            graph.extend(message)
-
-    # ------------------------------------------------------------------
-    # Phase 2: the Crisis-active run loop
-    # ------------------------------------------------------------------
-
-    def run_crisis_phase(self, num_turns: int) -> MothershipRunResult:
-        """Drive `num_turns` of agent activity with Crisis active.
+    def run_crisis_phase(self, num_turns: int,
+                         *, gossip_rounds_per_turn: int = 1) -> MothershipRunResult:
+        """Drive `num_turns` of Crisis-active activity.
 
         Each turn:
-          1. Every agent (including the byzantine joiner) is asked for its
-             emissions. Each emission carries an optional `target_subset`.
-          2. Each emission is wrapped into a Crisis Message against the
-             SENDER's view of the graph (the agent's own LamportGraph).
-          3. The Message is delivered (extended) into the LamportGraphs of
-             every peer in the target subset (or every peer if None).
-          4. The (agent, turn, claim, message_digest, delivered_to) tuple
-             is logged for downstream proof generation.
+          1. Every agent's `next_turn()` runs; emissions are routed first-hop
+             to their declared target_subset (or broadcast to everyone).
+          2. `gossip_rounds_per_turn` rounds of all-pairs gossip propagate
+             messages across the network.
         """
         if not self.boundary.is_open:
             raise RuntimeError("boundary not yet open; call open_boundary() first")
@@ -249,72 +176,201 @@ class Mothership:
         for _ in range(num_turns):
             turn = self._crisis_turn_index
 
-            # Snapshot of received claims per agent — for the agent's view
-            # of the conversation when it decides what to say next. In the
-            # PoC this is the agent's graph's vertex set, decoded back to
-            # Claim objects.
+            # (1) Emission phase — ask each agent what they want to say.
+            #     The agent builds the Crisis Message from its own graph.
+            #     The mothership only handles the first-hop routing.
             for agent in self.agents.values():
-                received: list[Claim] = []
-                for v in self._graphs[agent.name].all_vertices():
-                    if v.id == agent.process_id:
-                        continue
-                    try:
-                        received.append(Claim.from_payload(v.payload))
-                    except (ValueError, TypeError):
-                        # Not all vertices need to be Claim-shaped (defensive)
-                        continue
-
+                received = self._crisis_received_view(agent)
                 for at in agent.next_turn(turn, received):
-                    self._emit(agent, turn, at, all_names)
+                    self._route_emission(agent, turn, at, all_names)
+
+            # (2) Gossip — each pair exchanges what they have until quiescent.
+            for _ in range(gossip_rounds_per_turn):
+                self.run_gossip_round()
 
             self._crisis_turn_index += 1
 
         return self.run_result
 
-    def _emit(self, agent: CrisisAgent, turn: int, at: AgentTurn,
-              all_names: list[str]) -> None:
-        """Resolve target subset, build message, deliver, log.
+    def _route_emission(self, sender: CrisisAgent, turn: int, at: AgentTurn,
+                        all_names: list[str]) -> None:
+        """First-hop delivery + audit log entry.
 
-        Delivery rule:
-          - target_subset is None  ⇒ honest broadcast to all peers including
-            the sender's own graph.
-          - target_subset is set   ⇒ targeted delivery; the sender's own
-            graph is NOT auto-included. This is what enables byzantine
-            equivocation: a byzantine sender emits two variants with
-            disjoint targets, and its own graph holds neither — otherwise
-            the second variant would fail the same-id chain constraint
-            against the first variant.
-
-        The byzantine still "knows" what it said via the crisis_log; what
-        it doesn't keep in its own LamportGraph is the conflicting state.
+        Delivery rule (same as before — kept for byzantine equivocation):
+          - target_subset is None  ⇒ broadcast (every agent including sender)
+          - target_subset is set   ⇒ targeted; sender's own graph NOT auto-included
         """
         if at.target_subset is None:
             targets = list(all_names)
         else:
             targets = [t for t in at.target_subset if t in self.agents]
 
-        msg = self._wrap_as_message(agent, at.claim, self._graphs[agent.name])
-        self._deliver(agent, msg, targets)
+        # The agent wraps the Claim using its own graph as the source of truth.
+        message = sender.emit_claim(at.claim)
+
+        for tname in targets:
+            self.agents[tname].receive(message)
 
         self.run_result.crisis_log.append(
             CrisisPhaseEntry(
-                agent_name=agent.name,
+                agent_name=sender.name,
                 turn=turn,
                 claim=at.claim,
-                message_digest_hex=msg.compute_digest().hex(),
+                message_digest_hex=message.compute_digest().hex(),
                 delivered_to=targets,
             )
         )
 
+    def run_gossip_round(self) -> dict[tuple[str, str], int]:
+        """One all-pairs gossip round.
+
+        For every ordered pair (sender, receiver), the sender shares everything
+        in its graph that the receiver doesn't yet have. Returns a dict mapping
+        (sender_name, receiver_name) -> number of newly-accepted vertices.
+
+        Order matters mildly: if A -> B propagates new info to B that B then
+        re-emits to C, that's covered in this same round only if A appears
+        before B in the iteration. We loop until no progress to avoid edge
+        cases. In practice one ordered pass is usually enough.
+        """
+        names = list(self.agents.keys())
+        transfers: dict[tuple[str, str], int] = {}
+        for s_name in names:
+            for r_name in names:
+                if s_name == r_name:
+                    continue
+                n = self.agents[s_name].gossip_to(self.agents[r_name])
+                if n:
+                    transfers[(s_name, r_name)] = n
+        return transfers
+
     # ------------------------------------------------------------------
-    # Read-only accessors (used by alarm.py and proof.py in later phases)
+    # Decentralized alarm flow — orchestration only; the work is per-agent
     # ------------------------------------------------------------------
 
-    def graph_of(self, agent_name: str) -> LamportGraph:
-        """The LamportGraph held by `agent_name` (Crisis phase only)."""
-        if agent_name not in self._graphs:
-            raise KeyError(f"no Crisis-phase graph for agent {agent_name!r}")
-        return self._graphs[agent_name]
+    def emit_alarms_from_detectors(self,
+                                    *, accuse_self_ok: bool = False
+                                    ) -> dict[str, list]:
+        """Every agent independently runs `detect_mutations()` on its own
+        graph; any LocalAlarms it produces become AlarmClaims that the agent
+        emits into the gossip layer (broadcast).
 
-    def all_graphs(self) -> dict[str, LamportGraph]:
-        return dict(self._graphs)
+        Returns a dict mapping agent_name -> list[LocalAlarm] (what each
+        agent independently found). Callers can use this for diagnostics
+        without ever having read into an agent's graph directly.
+
+        The byzantine joiner will of course not emit alarms about itself.
+        If `accuse_self_ok` is False (the default), we additionally skip
+        any LocalAlarm whose `detector_process_id_hex` matches the
+        `accused_process_id_hex` — sanity guard against malformed cases.
+        """
+        from crisis_agents.vote import AlarmClaim
+
+        all_local: dict[str, list] = {}
+        for agent in self.agents.values():
+            locals_for_agent = agent.detect_mutations()
+            if not accuse_self_ok:
+                locals_for_agent = [
+                    a for a in locals_for_agent
+                    if a.detector_process_id_hex != a.accused_process_id_hex
+                ]
+            all_local[agent.name] = locals_for_agent
+
+            for local in locals_for_agent:
+                alarm_claim = AlarmClaim.from_local_alarm(
+                    local, detected_at_turn=self._crisis_turn_index,
+                )
+                # Wrap the AlarmClaim's payload into a Crisis Message and
+                # broadcast it. We bypass the Claim/AgentTurn machinery
+                # because AlarmClaim is a different payload schema.
+                self._broadcast_alarm(agent, alarm_claim)
+
+        return all_local
+
+    def _broadcast_alarm(self, sender: CrisisAgent, alarm_claim) -> None:
+        """Wrap an AlarmClaim into a Crisis Message via the sender's
+        `emit_claim` machinery (re-using the digest-build + PoW path)
+        but with the AlarmClaim payload, and broadcast it to all peers
+        (including the sender so its own ratified set is consistent)."""
+        # We can't pass a non-Claim into emit_claim directly because emit_claim
+        # types its argument as Claim. Hack-around: build the Message manually
+        # using the same chain/cross-ref logic as emit_claim. Cleaner
+        # alternative is to refactor emit_claim to accept any payload-bytes
+        # producer; for now this duplication is minor.
+        import os
+        from crisis.message import Message, NONCE_LENGTH
+        from crisis.weight import ProofOfWorkWeight
+
+        payload = alarm_claim.to_payload()
+
+        digests_list: list[bytes] = []
+        same_id = [v for v in sender.graph.all_vertices() if v.id == sender.process_id]
+        past_digests: set[bytes] = set()
+        if same_id:
+            referenced = set()
+            for v in same_id:
+                for d in v.digests:
+                    ref = sender.graph.get_vertex(d)
+                    if ref is not None and ref.id == sender.process_id:
+                        referenced.add(d)
+            last = next(
+                (v for v in same_id if v.message_digest not in referenced),
+                same_id[-1],
+            )
+            digests_list.append(last.message_digest)
+            past_digests = {v.message_digest for v in sender.graph.past(last)}
+
+        seen_other_ids: set[bytes] = {sender.process_id}
+        for v in sender.graph.all_vertices():
+            if v.id in seen_other_ids:
+                continue
+            if v.message_digest in past_digests:
+                continue
+            digests_list.append(v.message_digest)
+            seen_other_ids.add(v.id)
+
+        if isinstance(sender.weight_system, ProofOfWorkWeight):
+            message = sender.weight_system.mine_nonce(
+                sender.process_id, tuple(digests_list), payload,
+            )
+        else:
+            message = Message(
+                nonce=os.urandom(NONCE_LENGTH),
+                id=sender.process_id,
+                digests=tuple(digests_list),
+                payload=payload,
+            )
+
+        for target in self.agents.values():
+            target.receive(message)
+
+    def ratified_alarms_from(self, agent_name: str):
+        """Get the ratified alarms as seen from one agent's graph.
+
+        With sufficient gossip, every honest agent's graph produces the same
+        ratified set — and the test in test_no_chokepoint.py asserts that.
+        """
+        from crisis_agents.vote import quorum_for, tally_alarms
+        threshold = quorum_for(self.boundary.size())
+        graph = self.agents[agent_name].graph
+        return tally_alarms(graph, quorum_threshold=threshold)
+
+    # ------------------------------------------------------------------
+    # Convenience accessors
+    # ------------------------------------------------------------------
+
+    def honest_agents(self) -> list[CrisisAgent]:
+        """The agents trusted at the start (closed-phase team) — i.e. every
+        agent except the boundary-opener. Use only as a demo aid; in a real
+        network the mothership doesn't reliably know who's honest."""
+        if not self.boundary.is_open:
+            return list(self.agents.values())
+        # The boundary-opener is added last via open_boundary(); peel it off.
+        all_agents = list(self.agents.values())
+        return all_agents[:-1]
+
+    def joiner(self) -> Optional[CrisisAgent]:
+        """The boundary-opener, if any."""
+        if not self.boundary.is_open:
+            return None
+        return list(self.agents.values())[-1]

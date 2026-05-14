@@ -1,131 +1,69 @@
 """
-proof.py — emit and verify replayable proof-of-malfeasance JSON documents.
+proof.py — produce and verify proof-of-malfeasance documents.
 
-A ProofDocument is a self-contained JSON file that:
-  1. Names the accused agent (human-readable name + 32-byte process_id).
-  2. Identifies the offense (statement_id, turn).
-  3. Includes every contradictory MutationWitness with its message digest,
-     parsed Claim, and delivery target set.
-  4. Records the "DAG witness" — for each witness vertex, which honest
-     agents' graphs hold it. An independent verifier can cross-check
-     this against the recorded simulation snapshots.
-  5. Asserts whether the Crisis layer confirmed spacelike-ness at the
-     time of detection.
+The proof is now multi-signer: a ratified alarm carries the process ids of
+every honest detector who agreed. Anyone (an external auditor, a future
+visualizer, a downstream policy engine) can replay the proof by:
+  1. Confirming the witness_digests are pairwise distinct.
+  2. Confirming all signers are distinct and meet the embedded quorum.
+  3. Re-deriving the alarm from a recorded simulation log (Phase 6,
+     not implemented in this PoC).
 
-The proof is replayable: given the JSON and the original `crisis_log`
-(or a recorded simulation), `verify_proof` re-derives the alarm and
-confirms each claim independently.
+The shape of the JSON is intentionally narrow and stable, so a future
+verifier in any language can parse it without depending on Python types.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import asdict, dataclass
 
-from crisis_agents.alarm import AlarmEvent, MutationWitness
-
-if TYPE_CHECKING:
-    from crisis_agents.mothership import Mothership
-
-
-@dataclass(frozen=True)
-class WitnessGraphReference:
-    """For one mutation witness, which honest agents' graphs hold it."""
-    message_digest_hex: str
-    observed_by: tuple[str, ...]   # honest agent names whose LamportGraph
-                                   # contains a vertex with this digest
+from crisis_agents.vote import RatifiedAlarm
 
 
 @dataclass(frozen=True)
 class ProofDocument:
-    """A replayable proof of one detected byzantine equivocation."""
-    schema_version: int = 1
-    accused_agent: str = ""
+    """A signed, replayable proof of one ratified byzantine equivocation."""
+    schema_version: int = 2  # bumped from 1 — multi-signer shape
     accused_process_id_hex: str = ""
     statement_id: str = ""
-    turn: int = 0
-    witnesses: tuple[MutationWitness, ...] = ()
-    dag_witnesses: tuple[WitnessGraphReference, ...] = ()
-    spacelike_verified: bool = False
-    proof_summary: str = ""
+    witness_digests: tuple[str, str] = ("", "")
+    signer_process_id_hexes: tuple[str, ...] = ()
+    quorum_threshold: int = 0
+    summary: str = ""
 
     def to_json(self) -> str:
-        """Serialize to indented JSON. Uses asdict on the nested dataclasses
-        so the resulting structure is plain dict / list / str / int / bool —
-        cleanly inspectable with `jq` and re-parseable."""
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
     def from_json(cls, text: str) -> "ProofDocument":
         obj = json.loads(text)
         return cls(
-            schema_version=obj.get("schema_version", 1),
-            accused_agent=obj["accused_agent"],
+            schema_version=obj.get("schema_version", 2),
             accused_process_id_hex=obj["accused_process_id_hex"],
             statement_id=obj["statement_id"],
-            turn=obj["turn"],
-            witnesses=tuple(
-                MutationWitness(
-                    message_digest_hex=w["message_digest_hex"],
-                    payload_claim=w["payload_claim"],
-                    delivered_to=tuple(w["delivered_to"]),
-                )
-                for w in obj["witnesses"]
-            ),
-            dag_witnesses=tuple(
-                WitnessGraphReference(
-                    message_digest_hex=g["message_digest_hex"],
-                    observed_by=tuple(g["observed_by"]),
-                )
-                for g in obj["dag_witnesses"]
-            ),
-            spacelike_verified=obj["spacelike_verified"],
-            proof_summary=obj["proof_summary"],
+            witness_digests=tuple(obj["witness_digests"]),  # type: ignore[arg-type]
+            signer_process_id_hexes=tuple(obj["signer_process_id_hexes"]),
+            quorum_threshold=obj["quorum_threshold"],
+            summary=obj["summary"],
         )
 
 
-def build_proof(mothership: "Mothership", alarm: AlarmEvent) -> ProofDocument:
-    """Produce the ProofDocument for a single alarm.
-
-    Cross-references each witness against every honest agent's LamportGraph
-    so the proof carries the "who saw what" structure.
-    """
-    accused_pid = mothership.agents[alarm.accused_agent].process_id
-    honest_names = [
-        name for name, ag in mothership.agents.items()
-        if ag.process_id != accused_pid
-    ]
-
-    dag_refs = []
-    for w in alarm.witnesses:
-        digest = bytes.fromhex(w.message_digest_hex)
-        observed_by = tuple(
-            name for name in honest_names
-            if digest in mothership.graph_of(name)
-        )
-        dag_refs.append(WitnessGraphReference(
-            message_digest_hex=w.message_digest_hex,
-            observed_by=observed_by,
-        ))
-
+def build_proof(alarm: RatifiedAlarm) -> ProofDocument:
+    """Build a ProofDocument from a network-ratified alarm."""
     summary = (
-        f"agent {alarm.accused_agent!r} (id={alarm.accused_process_id_hex[:16]}...) "
-        f"emitted {len(alarm.witnesses)} contradictory Crisis vertices for "
-        f"statement {alarm.statement_id!r} in turn {alarm.turn}; vertices "
-        f"{'are confirmed' if alarm.spacelike_verified else 'appear to be'} "
-        f"spacelike in the DAG of at least one honest agent."
+        f"agent id={alarm.accused_process_id_hex[:16]}... emitted contradictory "
+        f"Crisis vertices about statement {alarm.statement_id!r}; "
+        f"{alarm.signer_count} of N detectors independently agree, meeting the "
+        f"quorum threshold of {alarm.quorum_threshold}."
     )
-
     return ProofDocument(
-        accused_agent=alarm.accused_agent,
         accused_process_id_hex=alarm.accused_process_id_hex,
         statement_id=alarm.statement_id,
-        turn=alarm.turn,
-        witnesses=alarm.witnesses,
-        dag_witnesses=tuple(dag_refs),
-        spacelike_verified=alarm.spacelike_verified,
-        proof_summary=summary,
+        witness_digests=alarm.witness_digests,
+        signer_process_id_hexes=alarm.signer_process_id_hexes,
+        quorum_threshold=alarm.quorum_threshold,
+        summary=summary,
     )
 
 
@@ -136,46 +74,41 @@ class VerificationResult:
 
 
 def verify_proof_self_consistent(proof: ProofDocument) -> VerificationResult:
-    """Verify the proof is self-consistent — without re-running the simulation.
+    """Verify the proof is internally self-consistent.
 
-    Checks:
-      - schema_version is known
-      - at least 2 witnesses
-      - witness message digests are pairwise distinct
-      - witness delivery sets are pairwise non-identical
-      - witnesses agree on the statement_id and turn fields named in the proof
-      - dag_witnesses cover every witness digest
+    Checks (no external simulation needed):
+      - schema version is known
+      - exactly 2 distinct witness digests
+      - signer count meets the embedded quorum threshold
+      - signer ids are unique
+      - witness digests are non-empty hex strings
 
-    What we do NOT check here (would require the recorded simulation):
+    What we don't check here (would require the recorded simulation log):
       - that the digests correspond to real PoW-mined Crisis Messages
-      - that the spacelike-verified flag matches a fresh DAG re-derivation
-
-    A future `verify_proof_against_log(proof, recorded_events)` would close
-    that gap.
+      - that any honest agent's graph actually contains both witnesses
     """
-    if proof.schema_version != 1:
+    if proof.schema_version != 2:
         return VerificationResult(False, f"unsupported schema_version {proof.schema_version}")
-    if len(proof.witnesses) < 2:
-        return VerificationResult(False, "fewer than 2 witnesses — no equivocation")
-
-    digests = [w.message_digest_hex for w in proof.witnesses]
-    if len(set(digests)) != len(digests):
-        return VerificationResult(False, "duplicate witness digests")
-
-    deliveries = {tuple(w.delivered_to) for w in proof.witnesses}
-    if len(deliveries) < 2:
-        return VerificationResult(False, "all witnesses have identical delivery sets")
-
-    for w in proof.witnesses:
-        if w.payload_claim.get("statement_id") != proof.statement_id:
-            return VerificationResult(False, f"witness disagrees on statement_id: {w}")
-
-    dag_digests = {g.message_digest_hex for g in proof.dag_witnesses}
-    if set(digests) - dag_digests:
-        return VerificationResult(False, "dag_witnesses missing for some witness")
+    if len(proof.witness_digests) != 2:
+        return VerificationResult(False, "expected exactly 2 witness digests")
+    if proof.witness_digests[0] == proof.witness_digests[1]:
+        return VerificationResult(False, "witness digests must be distinct")
+    if not all(proof.witness_digests):
+        return VerificationResult(False, "witness digests must be non-empty")
+    if len(proof.signer_process_id_hexes) < proof.quorum_threshold:
+        return VerificationResult(
+            False,
+            f"signer count {len(proof.signer_process_id_hexes)} < "
+            f"quorum {proof.quorum_threshold}",
+        )
+    if len(set(proof.signer_process_id_hexes)) != len(proof.signer_process_id_hexes):
+        return VerificationResult(False, "duplicate signers")
+    if not proof.accused_process_id_hex:
+        return VerificationResult(False, "accused process id is empty")
 
     return VerificationResult(
         True,
-        f"proof is self-consistent: {len(proof.witnesses)} contradictory "
-        f"witnesses for statement {proof.statement_id!r} at turn {proof.turn}",
+        f"{proof.signer_process_id_hexes.__len__()} detectors independently "
+        f"agree on equivocation about {proof.statement_id!r}; "
+        f"meets quorum of {proof.quorum_threshold}",
     )

@@ -1,138 +1,97 @@
-"""Tests for proof generation and self-consistent verification."""
+"""Tests for ProofDocument + self-consistent verification."""
 
 import json
+from dataclasses import replace
 
-from crisis_agents.agent import MockAgent, MockByzantineAgent
-from crisis_agents.alarm import scan_for_mutations
-from crisis_agents.claim import Claim
-from crisis_agents.mothership import Mothership
+import pytest
+
 from crisis_agents.proof import (
     ProofDocument,
+    VerificationResult,
     build_proof,
     verify_proof_self_consistent,
 )
+from crisis_agents.vote import RatifiedAlarm
 
 
-def _claim(sid: str, verdict: str = "true", evidence: str = "ok") -> Claim:
-    return Claim(statement_id=sid, verdict=verdict, confidence=0.9,  # type: ignore[arg-type]
-                 evidence=evidence, timestamp_logical=0)
-
-
-def _equivocating_run() -> tuple[Mothership, list]:
-    m = Mothership()
-    m.add_agent(MockAgent("a", [[]]))
-    m.add_agent(MockAgent("b", [[]]))
-    m.add_agent(MockAgent("c", [[]]))
-    m.open_boundary(MockByzantineAgent(
-        "d",
-        scripted_pairs=[(
-            _claim("s03", verdict="true", evidence="to_a"),
-            _claim("s03", verdict="false", evidence="to_b"),
-        )],
-        split_a={"a", "c"},
-        split_b={"b"},
-    ))
-    m.run_crisis_phase(num_turns=1)
-    alarms = scan_for_mutations(m)
-    return m, alarms
+def _sample_ratified() -> RatifiedAlarm:
+    return RatifiedAlarm(
+        accused_process_id_hex="76468f93" * 8,
+        statement_id="s03",
+        witness_digests=("a" * 64, "b" * 64),
+        signer_process_id_hexes=("11" * 32, "22" * 32, "33" * 32),
+        quorum_threshold=3,
+    )
 
 
 class TestBuildProof:
 
     def test_produces_well_formed_proof(self):
-        m, alarms = _equivocating_run()
-        assert len(alarms) == 1
-        proof = build_proof(m, alarms[0])
-        assert proof.accused_agent == "d"
+        proof = build_proof(_sample_ratified())
+        assert proof.accused_process_id_hex.startswith("76468f93")
         assert proof.statement_id == "s03"
-        assert proof.turn == 0
-        assert len(proof.witnesses) == 2
-        assert proof.spacelike_verified is True
+        assert proof.quorum_threshold == 3
+        assert len(proof.signer_process_id_hexes) == 3
+        assert proof.schema_version == 2
 
-    def test_dag_witnesses_reference_real_graphs(self):
-        m, alarms = _equivocating_run()
-        proof = build_proof(m, alarms[0])
-        assert len(proof.dag_witnesses) == 2
-
-        # Each dag_witness should name only honest agents (not "d")
-        for dw in proof.dag_witnesses:
-            assert "d" not in dw.observed_by
-
-        # Each variant should have been observed by at least one honest agent
-        # (the variant's delivered-to subset)
-        for dw in proof.dag_witnesses:
-            assert len(dw.observed_by) >= 1
+    def test_summary_mentions_quorum(self):
+        proof = build_proof(_sample_ratified())
+        assert "quorum" in proof.summary.lower()
 
 
-class TestJsonRoundtrip:
+class TestRoundtripJSON:
 
-    def test_to_json_is_valid(self):
-        m, alarms = _equivocating_run()
-        proof = build_proof(m, alarms[0])
+    def test_to_from_json(self):
+        original = build_proof(_sample_ratified())
+        roundtrip = ProofDocument.from_json(original.to_json())
+        assert roundtrip == original
+
+    def test_json_is_indented_and_sorted(self):
+        proof = build_proof(_sample_ratified())
         text = proof.to_json()
         parsed = json.loads(text)
-        assert parsed["accused_agent"] == "d"
-        assert parsed["statement_id"] == "s03"
-
-    def test_from_json_inverts_to_json(self):
-        m, alarms = _equivocating_run()
-        original = build_proof(m, alarms[0])
-        roundtrip = ProofDocument.from_json(original.to_json())
-        assert roundtrip.accused_agent == original.accused_agent
-        assert roundtrip.statement_id == original.statement_id
-        assert roundtrip.turn == original.turn
-        assert roundtrip.spacelike_verified == original.spacelike_verified
-        assert len(roundtrip.witnesses) == len(original.witnesses)
+        # Sorted keys: schema_version after accused_process_id_hex alphabetically
+        # (just verify it's a dict with the expected keys)
+        assert set(parsed.keys()) == {
+            "accused_process_id_hex", "schema_version", "signer_process_id_hexes",
+            "statement_id", "quorum_threshold", "summary", "witness_digests",
+        }
 
 
 class TestSelfConsistentVerification:
 
     def test_valid_proof_passes(self):
-        m, alarms = _equivocating_run()
-        proof = build_proof(m, alarms[0])
+        proof = build_proof(_sample_ratified())
         result = verify_proof_self_consistent(proof)
         assert result.ok, result.reason
 
-    def test_tampered_witness_digest_fails(self):
-        """If someone alters a witness digest after-the-fact to make it look
-        like a duplicate, self-consistency check catches the lack of distinct
-        digests."""
-        m, alarms = _equivocating_run()
-        proof = build_proof(m, alarms[0])
-        # Tamper: make both digests identical
-        from dataclasses import replace
-        from crisis_agents.alarm import MutationWitness
-        w0 = proof.witnesses[0]
-        w1 = proof.witnesses[1]
-        tampered = ProofDocument(
-            schema_version=proof.schema_version,
-            accused_agent=proof.accused_agent,
-            accused_process_id_hex=proof.accused_process_id_hex,
-            statement_id=proof.statement_id,
-            turn=proof.turn,
-            witnesses=(w0, replace(w1, message_digest_hex=w0.message_digest_hex)),
-            dag_witnesses=proof.dag_witnesses,
-            spacelike_verified=proof.spacelike_verified,
-            proof_summary=proof.proof_summary,
+    def test_duplicate_witnesses_fail(self):
+        proof = build_proof(_sample_ratified())
+        tampered = replace(proof, witness_digests=("a" * 64, "a" * 64))
+        assert not verify_proof_self_consistent(tampered).ok
+
+    def test_below_quorum_fails(self):
+        ra = _sample_ratified()
+        proof = build_proof(ra)
+        tampered = replace(
+            proof,
+            signer_process_id_hexes=("11" * 32, "22" * 32),  # 2 < threshold 3
         )
         result = verify_proof_self_consistent(tampered)
         assert not result.ok
-        assert "duplicate" in result.reason.lower()
+        assert "quorum" in result.reason.lower()
 
-    def test_mismatched_statement_id_fails(self):
-        m, alarms = _equivocating_run()
-        proof = build_proof(m, alarms[0])
-        from dataclasses import replace
-        bad = ProofDocument(
-            schema_version=proof.schema_version,
-            accused_agent=proof.accused_agent,
-            accused_process_id_hex=proof.accused_process_id_hex,
-            statement_id="DIFFERENT",      # mismatch
-            turn=proof.turn,
-            witnesses=proof.witnesses,
-            dag_witnesses=proof.dag_witnesses,
-            spacelike_verified=proof.spacelike_verified,
-            proof_summary=proof.proof_summary,
+    def test_duplicate_signers_fail(self):
+        proof = build_proof(_sample_ratified())
+        tampered = replace(
+            proof,
+            signer_process_id_hexes=("11" * 32, "11" * 32, "33" * 32),
         )
-        result = verify_proof_self_consistent(bad)
+        assert not verify_proof_self_consistent(tampered).ok
+
+    def test_unsupported_schema_version_fails(self):
+        proof = build_proof(_sample_ratified())
+        tampered = replace(proof, schema_version=99)
+        result = verify_proof_self_consistent(tampered)
         assert not result.ok
+        assert "schema" in result.reason.lower()

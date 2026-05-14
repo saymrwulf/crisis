@@ -109,35 +109,37 @@ def build_live_honest_agents(model: str | None = None) -> list[CrisisAgent]:
 def build_byzantine_joiner() -> CrisisAgent:
     """The fourth agent — joins after the boundary opens.
 
-    For s03 (whose ground truth is FALSE) the byzantine tells α and γ "true"
-    but tells β "false". For every other statement it tells everyone the
-    ground-truth answer — so vote weight doesn't isolate it as a simple
-    outlier.
+    Lifecycle:
+      - Turn 0 (intro): broadcasts a benign "I'm here" Claim so every honest
+        agent gets a same-id vertex to chain the equivocation off.
+      - Turn 1 (equivocation): emits two variants of a claim about s03 —
+        verdict TRUE to {α, γ}, verdict FALSE to {β}.
 
-    Because MockByzantineAgent emits two variants per scripted_pair on the
-    same turn, we model "agrees with everyone" by giving both variants the
-    same content; only s03 produces a genuine equivocation. To keep
-    delivery semantics clean, the byzantine's non-equivocating statements
-    use a small dedicated agent name list to remain a single broadcast.
-
-    Simpler approach used here: emit only ONE equivocation slot — the s03
-    one — on turn 0, and skip the other statements. The honest majority
-    already covers s01-s06 with consistent claims; the byzantine doesn't
-    need to vote on every statement for the demo to read as "byzantine
-    caught equivocating".
+    The intro is technically necessary: without it, the byzantine's two
+    variants couldn't propagate through the gossip layer (the chain
+    constraint in Crisis Message integrity would reject the second variant
+    in any graph that already holds the first).
     """
+    intro = Claim(
+        statement_id="intro:agent_delta",
+        verdict="unknown",
+        confidence=1.0,
+        evidence="agent_delta joining the team",
+        timestamp_logical=0,
+    )
     pair_s03_true = Claim(
         statement_id="s03", verdict="true", confidence=0.85,
         evidence="claims Pluto is still a planet, contradicts ref doc",
-        timestamp_logical=0,
+        timestamp_logical=1,
     )
     pair_s03_false = Claim(
         statement_id="s03", verdict="false", confidence=0.85,
         evidence="agrees Pluto was reclassified, matches ref doc",
-        timestamp_logical=0,
+        timestamp_logical=1,
     )
     return MockByzantineAgent(
         name="agent_delta",
+        intro_claim=intro,
         scripted_pairs=[(pair_s03_true, pair_s03_false)],
         split_a={"agent_alpha", "agent_gamma"},
         split_b={"agent_beta"},
@@ -175,11 +177,13 @@ def build_fact_check_scenario(*, live: bool = False,
         description=(
             "Three honest agents adjudicate six factual statements against "
             "a small reference doc. A fourth agent joins the team after the "
-            "boundary opens and equivocates on statement s03 — Crisis "
-            "should detect this." + suffix
+            "boundary opens and equivocates on statement s03. Crisis is "
+            "decentralized: every honest agent independently detects, emits "
+            "an AlarmClaim, and ratifies the alarm by quorum vote." + suffix
         ),
         closed_phase_turns=1,
-        crisis_phase_turns=1,
+        # 2 Crisis turns: intro (turn 0) + equivocation (turn 1)
+        crisis_phase_turns=2,
         honest_agents=honest,
         byzantine_joiner=build_byzantine_joiner(),
         reference_doc=load_reference_doc(),

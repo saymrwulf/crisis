@@ -1,154 +1,107 @@
 """
-alarm.py — detect byzantine equivocation from the mothership's records.
+alarm.py — decentralized byzantine detection.
 
-Equivocation in our PoC has a precise structural signature: a single agent
-emits, on the same turn, two or more Crisis Messages with **different
-message digests** to **non-identical sets of peers**. Same-id same-turn
-same-payload duplicate broadcasts are not equivocation; we filter those out.
+Every agent runs its own `detect_mutations()` against its **own**
+LamportGraph. No privileged observer is needed; if gossip has propagated
+both equivocating vertices into an honest agent's view, that agent will
+see the same-id spacelike pair via `LamportGraph.find_mutations` and
+return a `LocalAlarm`.
 
-For each detected alarm we also verify via the Crisis layer's own machinery
-(`LamportGraph.are_spacelike`) that the two witness vertices are causally
-incomparable — this is what makes the alarm cryptographically defensible
-rather than merely a bookkeeping observation.
+A `LocalAlarm` is the detector's first-person statement: "I, agent X,
+observed agent Y emitting two contradictory vertices that are spacelike
+in my graph at this moment." Several agents may independently produce
+LocalAlarms about the same accused agent — that's the *point*. The
+network gains confidence in an alarm as more honest detectors emit
+matching ones.
+
+The next module, `vote.py`, turns local alarms into network-ratified
+alarms via gossip + quorum.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+
+from crisis.graph import LamportGraph
+from crisis.message import Vertex
 
 from crisis_agents.claim import Claim
 
-if TYPE_CHECKING:
-    from crisis_agents.mothership import CrisisPhaseEntry, Mothership
-
 
 @dataclass(frozen=True)
-class MutationWitness:
-    """One leg of a byzantine equivocation: a specific Crisis vertex emitted
-    by the accused agent that contradicts another vertex from the same agent
-    in the same logical turn.
+class LocalAlarm:
+    """One agent's first-person observation of a same-id spacelike vertex pair.
+
+    Note: this is the *detector's* perspective. Multiple detectors may emit
+    LocalAlarms about the same accused agent; they're combined by the voting
+    layer into a `RatifiedAlarm` once quorum is met.
+
+    Attributes:
+        detector_name:           Human name of the agent that detected it.
+        detector_process_id_hex: 32-byte process_id of the detector (hex).
+        accused_process_id_hex:  Process id of the agent the detector accuses.
+        statement_id:            The application-layer subject of the equivocation.
+        witness_digests:         Tuple of contradictory vertex digests (hex,
+                                 sorted lexicographically for canonical
+                                 cross-detector comparison).
     """
-    message_digest_hex: str
-    payload_claim: dict             # the parsed Claim as a plain dict (for JSON proof)
-    delivered_to: tuple[str, ...]   # peers that received THIS variant
-
-
-@dataclass(frozen=True)
-class AlarmEvent:
-    """A detected byzantine equivocation.
-
-    The combination of `accused_process_id_hex`, `turn`, and `statement_id`
-    uniquely identifies the offense; multiple witnesses prove the offender
-    said different things to different peers.
-    """
-    accused_agent: str
+    detector_name: str
+    detector_process_id_hex: str
     accused_process_id_hex: str
     statement_id: str
-    turn: int
-    witnesses: tuple[MutationWitness, ...]
-    spacelike_verified: bool         # True if the Crisis layer confirmed
-                                     # the witness vertices are spacelike in
-                                     # at least one honest agent's graph
+    witness_digests: tuple[str, str]
 
 
-def scan_for_mutations(mothership: "Mothership") -> list[AlarmEvent]:
-    """Walk the mothership's crisis log and surface every equivocation.
+def detect_mutations_in_graph(graph: LamportGraph,
+                               detector_name: str,
+                               detector_process_id: bytes) -> list[LocalAlarm]:
+    """Scan `graph` for same-id spacelike vertex groups and emit LocalAlarms.
 
-    Strategy:
-      1. Group crisis-log entries by (agent_name, turn).
-      2. A group with ≥2 distinct message digests AND non-identical delivery
-         sets is a mutation candidate.
-      3. For each candidate, build MutationWitness records.
-      4. Verify spacelike-ness via the Crisis DAG of any honest agent that
-         observed at least two of the witnesses.
+    Skips the detector's own id (an agent doesn't accuse itself; if it
+    finds same-id spacelike vertices in its own emissions it's witnessing
+    its own bug, not byzantine behavior — that should be a hard failure
+    rather than an alarm).
 
-    Returns AlarmEvents (possibly empty).
+    For each accused id, if mutations exist, builds one LocalAlarm per
+    distinct (statement_id, witness-pair) tuple. Pairs are formed from the
+    first two vertices in each spacelike group; if a group has >2 spacelike
+    vertices, we still emit just the first pair to keep the proof compact.
+    Subsequent pairs can be derived if needed.
     """
-    crisis_log = mothership.run_result.crisis_log
-    by_agent_turn: dict[tuple[str, int], list["CrisisPhaseEntry"]] = {}
-    for entry in crisis_log:
-        by_agent_turn.setdefault((entry.agent_name, entry.turn), []).append(entry)
+    alarms: list[LocalAlarm] = []
+    seen_process_ids = graph.all_process_ids()
 
-    alarms: list[AlarmEvent] = []
-    for (agent_name, turn), entries in by_agent_turn.items():
-        if len(entries) < 2:
+    for pid in seen_process_ids:
+        if pid == detector_process_id:
             continue
+        mutation_groups = graph.find_mutations(pid)
+        for group in mutation_groups:
+            # Group vertices by their parsed statement_id; only equivocations
+            # on the same statement count as mutations *for our purposes*. The
+            # underlying Crisis graph already requires same-id; we add the
+            # application-layer same-statement filter on top.
+            by_statement: dict[str, list[Vertex]] = {}
+            for v in group:
+                try:
+                    claim = Claim.from_payload(v.payload)
+                except (ValueError, TypeError):
+                    continue
+                by_statement.setdefault(claim.statement_id, []).append(v)
 
-        digests = {e.message_digest_hex for e in entries}
-        if len(digests) < 2:
-            continue  # same payload replayed — not equivocation
-
-        delivery_sets = {tuple(sorted(e.delivered_to)) for e in entries}
-        if len(delivery_sets) < 2:
-            continue  # same recipients — not equivocation
-
-        # All checks passed: this is an equivocation candidate.
-        statement_id = entries[0].claim.statement_id
-        accused_pid_hex = mothership.agents[agent_name].process_id.hex()
-
-        witnesses = tuple(
-            MutationWitness(
-                message_digest_hex=e.message_digest_hex,
-                payload_claim=e.claim.to_dict(),
-                delivered_to=tuple(sorted(e.delivered_to)),
-            )
-            for e in entries
-        )
-
-        spacelike_ok = _verify_spacelike(mothership, agent_name, entries)
-
-        alarms.append(AlarmEvent(
-            accused_agent=agent_name,
-            accused_process_id_hex=accused_pid_hex,
-            statement_id=statement_id,
-            turn=turn,
-            witnesses=witnesses,
-            spacelike_verified=spacelike_ok,
-        ))
+            for statement_id, vertices in by_statement.items():
+                if len(vertices) < 2:
+                    continue
+                # Canonicalize: sorted hex digests so two detectors who see
+                # the same pair emit identical LocalAlarms.
+                d1 = vertices[0].message_digest.hex()
+                d2 = vertices[1].message_digest.hex()
+                pair = tuple(sorted((d1, d2)))
+                alarms.append(LocalAlarm(
+                    detector_name=detector_name,
+                    detector_process_id_hex=detector_process_id.hex(),
+                    accused_process_id_hex=pid.hex(),
+                    statement_id=statement_id,
+                    witness_digests=pair,  # type: ignore[arg-type]
+                ))
 
     return alarms
-
-
-def _verify_spacelike(mothership: "Mothership", accused_name: str,
-                      entries: list["CrisisPhaseEntry"]) -> bool:
-    """Ask the Crisis layer to confirm that the equivocating vertices are
-    causally incomparable.
-
-    Strategy: pick any pair of entries. Find an honest agent's graph that
-    contains both vertices and ask `are_spacelike`. If no single graph holds
-    both (because the byzantine delivered them to disjoint subsets), pick
-    two graphs — one per entry — and check that neither vertex references
-    the other directly. This weaker check is sufficient for our PoC: if
-    neither references the other, they can't be in each other's past in
-    any extended graph either.
-    """
-    a, b = entries[0], entries[1]
-    digest_a = bytes.fromhex(a.message_digest_hex)
-    digest_b = bytes.fromhex(b.message_digest_hex)
-
-    # Try to find an honest observer's graph that contains both.
-    accused_pid = mothership.agents[accused_name].process_id
-    for name, graph in mothership.all_graphs().items():
-        if mothership.agents[name].process_id == accused_pid:
-            continue
-        if digest_a in graph and digest_b in graph:
-            va = graph.get_vertex(digest_a)
-            vb = graph.get_vertex(digest_b)
-            if va is not None and vb is not None:
-                return graph.are_spacelike(va, vb)
-
-    # Weak proof: confirm neither vertex directly references the other in
-    # any honest agent's graph. Sufficient in our PoC where equivocations
-    # are emitted at the same turn from the same parent.
-    for name, graph in mothership.all_graphs().items():
-        if mothership.agents[name].process_id == accused_pid:
-            continue
-        va = graph.get_vertex(digest_a)
-        vb = graph.get_vertex(digest_b)
-        if va is not None and digest_b in (vb_digest for vb_digest in va.digests):
-            return False
-        if vb is not None and digest_a in (va_digest for va_digest in vb.digests):
-            return False
-
-    return True
